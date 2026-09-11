@@ -35,6 +35,7 @@ watch_streak_minutes: 10
 
 # Watch priority evaluated in order, first match wins
 priority:
+  - BADGES
   - STREAK
   - PREFERRED
   - DROPS
@@ -49,6 +50,14 @@ category_watcher:
     - slug: "just-chatting"
     - slug: "league-of-legends"
       drops_only: true
+
+# Badge watcher - automatically discovers active watch-time chat badge Drops.
+# Uses the community-maintained TwitchDrops catalog from the v3 project.
+# Keep BADGES near the top of priority so its selected stream receives watch credit.
+badge_watcher:
+  enabled: false
+  poll_interval: 1h
+  streamer_limit: 1 # Twitch reliably credits at most about two concurrent streams
 
 # Team watcher - auto-discover streams by team membership
 # Picks one live streamer per team (highest viewers), similar to category_watcher.

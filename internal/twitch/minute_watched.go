@@ -434,6 +434,8 @@ func applyPriority(
 		applyPriorityOrder(onlineIndices, remaining, add)
 	case model.PriorityPreferred:
 		applyPriorityPreferred(streamers, onlineIndices, watching, remaining, add, opts.Preferred)
+	case model.PriorityBadges:
+		applyPriorityBadges(streamers, onlineIndices, watching, remaining, add)
 	case model.PriorityStreak:
 		applyPriorityStreak(streamers, onlineIndices, watching, remaining, add, opts.StreakMinutes)
 	case model.PriorityDrops:
@@ -446,6 +448,23 @@ func applyPriority(
 		applyPriorityEndingSoonest(streamers, onlineIndices, watching, remaining, add)
 	case model.PriorityLowAvailabilityFirst:
 		applyPriorityLowAvailability(streamers, onlineIndices, watching, remaining, add)
+	}
+}
+
+func applyPriorityBadges(streamers []*model.Streamer, onlineIndices []int, watching map[int]struct{}, remaining int, add func(int) bool) {
+	for _, idx := range onlineIndices {
+		if remaining <= 0 {
+			return
+		}
+		if _, ok := watching[idx]; ok {
+			continue
+		}
+		streamers[idx].Mu.RLock()
+		isBadge := streamers[idx].IsBadgeWatched
+		streamers[idx].Mu.RUnlock()
+		if isBadge && add(idx) {
+			remaining--
+		}
 	}
 }
 

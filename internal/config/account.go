@@ -61,6 +61,8 @@ type AccountConfig struct {
 
 	CategoryWatcher CategoryWatcherConfig `yaml:"category_watcher" json:"category_watcher"`
 
+	BadgeWatcher BadgeWatcherConfig `yaml:"badge_watcher" json:"badge_watcher"`
+
 	TeamWatcher TeamWatcherConfig `yaml:"team_watcher" json:"team_watcher"`
 
 	StreamerDefaults StreamerSettingsConfig `yaml:"streamer_defaults" json:"streamer_defaults"`
@@ -74,6 +76,44 @@ type AccountConfig struct {
 	Followers FollowersConfig `yaml:"followers" json:"followers"`
 
 	Notifications NotificationsConfig `yaml:"notifications" json:"notifications"`
+}
+
+// BadgeWatcherConfig controls automatic discovery of watch-time chat badge campaigns.
+// The feature is opt-in because its catalog is maintained outside Twitch's public API.
+type BadgeWatcherConfig struct {
+	Enabled          bool          `yaml:"enabled" json:"enabled"`
+	PollInterval     time.Duration `yaml:"poll_interval" json:"-"`
+	StreamerLimit    int           `yaml:"streamer_limit" json:"streamer_limit"`
+	DropsCatalogURL  string        `yaml:"drops_catalog_url,omitempty" json:"drops_catalog_url,omitempty"`
+	BadgesCatalogURL string        `yaml:"badges_catalog_url,omitempty" json:"badges_catalog_url,omitempty"`
+}
+
+func (b BadgeWatcherConfig) MarshalJSON() ([]byte, error) {
+	type alias struct {
+		Enabled          bool         `json:"enabled"`
+		PollInterval     jsonDuration `json:"poll_interval,omitempty"`
+		StreamerLimit    int          `json:"streamer_limit"`
+		DropsCatalogURL  string       `json:"drops_catalog_url,omitempty"`
+		BadgesCatalogURL string       `json:"badges_catalog_url,omitempty"`
+	}
+	return json.Marshal(alias{b.Enabled, jsonDuration(b.PollInterval), b.StreamerLimit, b.DropsCatalogURL, b.BadgesCatalogURL})
+}
+
+func (b *BadgeWatcherConfig) UnmarshalJSON(data []byte) error {
+	type alias struct {
+		Enabled          bool         `json:"enabled"`
+		PollInterval     jsonDuration `json:"poll_interval,omitempty"`
+		StreamerLimit    int          `json:"streamer_limit"`
+		DropsCatalogURL  string       `json:"drops_catalog_url,omitempty"`
+		BadgesCatalogURL string       `json:"badges_catalog_url,omitempty"`
+	}
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	b.Enabled, b.PollInterval, b.StreamerLimit = a.Enabled, time.Duration(a.PollInterval), a.StreamerLimit
+	b.DropsCatalogURL, b.BadgesCatalogURL = a.DropsCatalogURL, a.BadgesCatalogURL
+	return nil
 }
 
 // AuthConfig holds authentication-related settings.

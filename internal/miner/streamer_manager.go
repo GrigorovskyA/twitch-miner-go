@@ -211,7 +211,7 @@ func (m *Miner) resolveStreamers(ctx context.Context) error {
 		}
 	}
 
-	if len(resolved) == 0 && !m.cfg.CategoryWatcher.Enabled && !m.cfg.TeamWatcher.Enabled {
+	if len(resolved) == 0 && !m.cfg.CategoryWatcher.Enabled && !m.cfg.TeamWatcher.Enabled && !m.cfg.BadgeWatcher.Enabled {
 		return fmt.Errorf("no streamers could be resolved for account %s", m.cfg.Username)
 	}
 

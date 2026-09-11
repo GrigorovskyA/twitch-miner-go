@@ -159,6 +159,12 @@ func applyDefaults(cfg *AccountConfig) {
 	if cfg.TeamWatcher.PollInterval == 0 {
 		cfg.TeamWatcher.PollInterval = 120 * time.Second
 	}
+	if cfg.BadgeWatcher.PollInterval == 0 {
+		cfg.BadgeWatcher.PollInterval = time.Hour
+	}
+	if cfg.BadgeWatcher.StreamerLimit == 0 {
+		cfg.BadgeWatcher.StreamerLimit = 1
+	}
 
 	if cfg.Followers.Order == "" {
 		cfg.Followers.Order = "ASC"
@@ -282,8 +288,11 @@ func Validate(cfg *AccountConfig) error {
 		return err
 	}
 
-	if len(cfg.Streamers) == 0 && !cfg.Followers.Enabled && !cfg.CategoryWatcher.Enabled && !cfg.TeamWatcher.Enabled {
-		return fmt.Errorf("account %s: at least one of streamers, followers, category_watcher, or team_watcher must be configured", cfg.Username)
+	if len(cfg.Streamers) == 0 && !cfg.Followers.Enabled && !cfg.CategoryWatcher.Enabled && !cfg.TeamWatcher.Enabled && !cfg.BadgeWatcher.Enabled {
+		return fmt.Errorf("account %s: at least one of streamers, followers, category_watcher, team_watcher, or badge_watcher must be configured", cfg.Username)
+	}
+	if cfg.BadgeWatcher.Enabled && (cfg.BadgeWatcher.StreamerLimit < 1 || cfg.BadgeWatcher.StreamerLimit > 2) {
+		return fmt.Errorf("account %s: badge_watcher.streamer_limit must be between 1 and 2", cfg.Username)
 	}
 
 	for i, streamerCfg := range cfg.Streamers {

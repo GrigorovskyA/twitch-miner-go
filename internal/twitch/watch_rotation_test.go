@@ -31,6 +31,16 @@ func usernames(set WatchSet) []string {
 	return out
 }
 
+func TestBadgePriorityWinsWatchSlot(t *testing.T) {
+	regular := streakSettled("regular")
+	badge := streakSettled("badge-channel")
+	badge.IsBadgeWatched = true
+	set := SelectWatchSet([]*model.Streamer{regular, badge}, WatchOptions{Priorities: []model.Priority{model.PriorityBadges, model.PriorityOrder}, MaxWatch: 1})
+	if got := usernames(set); len(got) != 1 || got[0] != "badge-channel" {
+		t.Fatalf("BADGES priority selected %v", got)
+	}
+}
+
 func rotationOptions(preferred ...string) WatchOptions {
 	return WatchOptions{
 		Priorities: []model.Priority{

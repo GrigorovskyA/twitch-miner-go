@@ -38,7 +38,7 @@ var schema = map[string]any{
 		"NUMBER_5", "NUMBER_6", "NUMBER_7", "NUMBER_8",
 	},
 	"chat_modes":      []string{"ALWAYS", "NEVER", "ONLINE", "OFFLINE"},
-	"priorities":      []string{"STREAK", "DROPS", "ORDER", "SUBSCRIBED", "POINTS_ASCENDING", "POINTS_DESCENDING"},
+	"priorities":      []string{"BADGES", "STREAK", "DROPS", "ORDER", "PREFERRED", "SUBSCRIBED", "ENDING_SOONEST", "LOW_AVAILABILITY_FIRST", "POINTS_ASCENDING", "POINTS_DESCENDING"},
 	"followers_order": []string{"ASC", "DESC"},
 	"delay_modes":     []string{"FROM_START", "FROM_END", "PERCENTAGE"},
 	"filter_where":    []string{"GT", "LT", "GTE", "LTE"},
@@ -60,6 +60,7 @@ var schema = map[string]any{
 		"priority":                       []string{"STREAK", "DROPS", "ORDER"},
 		"category_watcher_poll_interval": "120s",
 		"team_watcher_poll_interval":     "120s",
+		"badge_watcher_poll_interval":    "1h",
 		"followers_order":                "ASC",
 	},
 }
@@ -482,13 +483,14 @@ func validateConfig(cfg map[string]any) []string {
 		tw, ok := cfg["team_watcher"].(map[string]any)
 		return ok && tw["enabled"] == true
 	}
+	hasBW := func() bool { bw, ok := cfg["badge_watcher"].(map[string]any); return ok && bw["enabled"] == true }
 	hasFollowers := func() bool {
 		f, ok := cfg["followers"].(map[string]any)
 		return ok && f["enabled"] == true
 	}
 
-	if !hasStreamers() && !hasFollowers() && !hasCW() && !hasTW() {
-		errs = append(errs, "at least one of streamers, followers, category_watcher, or team_watcher must be configured")
+	if !hasStreamers() && !hasFollowers() && !hasCW() && !hasTW() && !hasBW() {
+		errs = append(errs, "at least one of streamers, followers, category_watcher, team_watcher, or badge_watcher must be configured")
 	}
 
 	if streamers, ok := cfg["streamers"].([]any); ok {
@@ -513,6 +515,11 @@ func validateConfig(cfg map[string]any) []string {
 			errs = append(errs, "team_watcher is enabled but no teams are configured")
 		}
 	}
+	if bw, ok := cfg["badge_watcher"].(map[string]any); ok && bw["enabled"] == true {
+		if limit, ok := bw["streamer_limit"].(float64); ok && (limit < 1 || limit > 2) {
+			errs = append(errs, "badge_watcher.streamer_limit must be between 1 and 2")
+		}
+	}
 
 	if sd, ok := cfg["streamer_defaults"].(map[string]any); ok {
 		if sd["make_predictions"] == true {
@@ -524,6 +531,7 @@ func validateConfig(cfg map[string]any) []string {
 
 	validateDuration(cfg, "category_watcher", "poll_interval", &errs)
 	validateDuration(cfg, "team_watcher", "poll_interval", &errs)
+	validateDuration(cfg, "badge_watcher", "poll_interval", &errs)
 	if notif, ok := cfg["notifications"].(map[string]any); ok {
 		if batch, ok := notif["batch"].(map[string]any); ok {
 			if v, ok := batch["interval"].(string); ok && v != "" && !isValidDuration(v) {
