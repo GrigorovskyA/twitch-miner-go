@@ -16,11 +16,18 @@ func TestBadgeRewardMatching(t *testing.T) {
 	}{
 		{"Two Point Pickle Chat Badge", "Two Point Museum", "Two Point Pickle", true},
 		{"Pickle", "Two Point Museum", "Two Point Pickle", true},
+		{"Solasta 2 Multiplayer", "Solasta II", "Solasta II Multiplayer", true},
 		{"Pet", "Path of Exile 2", "Unrelated Pet", false},
 	} {
 		if got := isBadgeReward(tc.reward, tc.game, tc.badge); got != tc.want {
 			t.Errorf("match(%q,%q,%q)=%v", tc.reward, tc.game, tc.badge, got)
 		}
+	}
+}
+
+func TestSlugifyPreservesRomanNumerals(t *testing.T) {
+	if got := slugify("Solasta II"); got != "solasta-ii" {
+		t.Fatalf("slugify(Solasta II)=%q", got)
 	}
 }
 

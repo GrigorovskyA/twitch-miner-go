@@ -77,9 +77,24 @@ type badgesCatalog struct {
 
 var badgeWordsRE = regexp.MustCompile(`[a-z0-9]+`)
 
+var romanBadgeNumbers = map[string]string{
+	"i": "1", "ii": "2", "iii": "3", "iv": "4", "v": "5",
+	"vi": "6", "vii": "7", "viii": "8", "ix": "9", "x": "10",
+}
+
 func words(s string) []string { return badgeWordsRE.FindAllString(strings.ToLower(s), -1) }
+
+func normalizedBadgeWords(s string) []string {
+	result := words(s)
+	for i, word := range result {
+		if number, ok := romanBadgeNumbers[word]; ok {
+			result[i] = number
+		}
+	}
+	return result
+}
 func comparableWords(s string) ([]string, bool) {
-	w := words(s)
+	w := normalizedBadgeWords(s)
 	removed := false
 	if len(w) >= 2 && w[len(w)-2] == "chat" && w[len(w)-1] == "badge" {
 		w, removed = w[:len(w)-2], true
@@ -110,7 +125,7 @@ func isBadgeReward(reward, game, badge string) bool {
 		return true
 	}
 	gw := make(map[string]bool)
-	for _, w := range words(game) {
+	for _, w := range normalizedBadgeWords(game) {
 		gw[w] = true
 	}
 	if len(bw) > len(rw) && equalWords(bw[len(bw)-len(rw):], rw) {

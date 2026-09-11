@@ -15,6 +15,8 @@ import (
 	"github.com/Guliveer/twitch-miner-go/internal/model"
 )
 
+const badgeCatalogCacheTTL = 5 * time.Minute
+
 type badgeGQL interface {
 	GetAvailableBadgeNames(context.Context) (map[string]struct{}, error)
 	GetDropsInventory(context.Context) (json.RawMessage, error)
@@ -202,7 +204,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 }
 
 func (bw *BadgeWatcher) loadCampaigns(ctx context.Context) ([]badgeCampaign, error) {
-	if len(bw.campaigns) > 0 && time.Since(bw.catalogLoadedAt) < time.Hour {
+	if len(bw.campaigns) > 0 && time.Since(bw.catalogLoadedAt) < badgeCatalogCacheTTL {
 		return bw.campaigns, nil
 	}
 	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now())
