@@ -305,7 +305,7 @@
 
     const bw = config.badge_watcher || {};
     setChecked('cfg-bw-enabled', bw.enabled || false);
-    setVal('cfg-bw-interval', bw.poll_interval || schema.defaults.badge_watcher_poll_interval || '1h');
+    setVal('cfg-bw-interval', bw.poll_interval || schema.defaults.badge_watcher_poll_interval || '5m');
     setVal('cfg-bw-limit', bw.streamer_limit || 1);
 
     const tw = config.team_watcher || {};
@@ -403,7 +403,7 @@
     if (getChecked('cfg-bw-enabled')) {
       config.badge_watcher = { enabled: true, streamer_limit: getNum('cfg-bw-limit') || 1 };
       const bwInt = getVal('cfg-bw-interval');
-      if (bwInt && bwInt !== (schema.defaults.badge_watcher_poll_interval || '1h')) config.badge_watcher.poll_interval = bwInt;
+      if (bwInt && bwInt !== (schema.defaults.badge_watcher_poll_interval || '5m')) config.badge_watcher.poll_interval = bwInt;
     }
 
     const sd = collectStreamerDefaults();

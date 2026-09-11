@@ -160,7 +160,7 @@ func applyDefaults(cfg *AccountConfig) {
 		cfg.TeamWatcher.PollInterval = 120 * time.Second
 	}
 	if cfg.BadgeWatcher.PollInterval == 0 {
-		cfg.BadgeWatcher.PollInterval = time.Hour
+		cfg.BadgeWatcher.PollInterval = 5 * time.Minute
 	}
 	if cfg.BadgeWatcher.StreamerLimit == 0 {
 		cfg.BadgeWatcher.StreamerLimit = 1

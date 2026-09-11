@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -29,14 +30,16 @@ type badgeTracked struct {
 // BadgeWatcher discovers active watch-time chat badge Drops and keeps a live,
 // eligible channel in the miner until Twitch reports the badge/campaign earned.
 type BadgeWatcher struct {
-	mu         sync.Mutex
-	cfg        config.BadgeWatcherConfig
-	gql        badgeGQL
-	httpClient *http.Client
-	log        *logger.Logger
-	blacklist  map[string]bool
-	defaults   *model.StreamerSettings
-	tracked    map[string]badgeTracked
+	mu              sync.Mutex
+	cfg             config.BadgeWatcherConfig
+	gql             badgeGQL
+	httpClient      *http.Client
+	log             *logger.Logger
+	blacklist       map[string]bool
+	defaults        *model.StreamerSettings
+	tracked         map[string]badgeTracked
+	campaigns       []badgeCampaign
+	catalogLoadedAt time.Time
 }
 
 func NewBadgeWatcher(cfg config.BadgeWatcherConfig, gqlClient badgeGQL, httpClient *http.Client, log *logger.Logger, blacklist []string, defaults *model.StreamerSettings) *BadgeWatcher {
@@ -55,7 +58,7 @@ func (bw *BadgeWatcher) Run(ctx context.Context, add func(context.Context, *mode
 }
 
 func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, *model.Streamer), remove func(string, string), get func() []*model.Streamer) {
-	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now())
+	campaigns, err := bw.loadCampaigns(ctx)
 	if err != nil {
 		bw.log.Warn("Failed to load badge campaign catalog", "error", err)
 		return
@@ -72,11 +75,19 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 	}
 	completed := completedCampaigns(raw)
 	eligible := make(map[string]badgeCampaign)
+	eligibleOrdered := make([]badgeCampaign, 0, len(campaigns))
 	for _, c := range campaigns {
-		if !ownsCampaignBadge(c, owned) && !campaignCompleted(c, completed) {
+		if c.EndsAt.After(time.Now()) && !ownsCampaignBadge(c, owned) && !campaignCompleted(c, completed) {
 			eligible[c.ID] = c
+			eligibleOrdered = append(eligibleOrdered, c)
 		}
 	}
+	sort.SliceStable(eligibleOrdered, func(i, j int) bool {
+		if eligibleOrdered[i].EndsAt.Equal(eligibleOrdered[j].EndsAt) {
+			return eligibleOrdered[i].Name < eligibleOrdered[j].Name
+		}
+		return eligibleOrdered[i].EndsAt.Before(eligibleOrdered[j].EndsAt)
+	})
 
 	// Retire completed campaigns and stale channels before filling free slots.
 	bw.mu.Lock()
@@ -110,7 +121,8 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		reserved[strings.ToLower(tr.username)] = true
 	}
 	bw.mu.Unlock()
-	for id, c := range eligible {
+	for _, c := range eligibleOrdered {
+		id := c.ID
 		if used >= limit || ctx.Err() != nil {
 			break
 		}
@@ -184,6 +196,22 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		used++
 		bw.log.Info("🏅 Discovered badge campaign stream", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 	}
+}
+
+func (bw *BadgeWatcher) loadCampaigns(ctx context.Context) ([]badgeCampaign, error) {
+	if len(bw.campaigns) > 0 && time.Since(bw.catalogLoadedAt) < time.Hour {
+		return bw.campaigns, nil
+	}
+	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now())
+	if err != nil {
+		if len(bw.campaigns) > 0 {
+			bw.log.Warn("Badge catalogs unavailable; using cached campaigns", "error", err, "cache_age", time.Since(bw.catalogLoadedAt).Round(time.Second))
+			return bw.campaigns, nil
+		}
+		return nil, err
+	}
+	bw.campaigns, bw.catalogLoadedAt = campaigns, time.Now()
+	return campaigns, nil
 }
 
 func badgeStreamerValid(s *model.Streamer, campaign badgeCampaign) bool {

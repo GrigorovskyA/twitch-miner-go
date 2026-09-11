@@ -56,7 +56,7 @@ category_watcher:
 # Keep BADGES near the top of priority so its selected stream receives watch credit.
 badge_watcher:
   enabled: false
-  poll_interval: 1h
+  poll_interval: 5m # earned badge/inventory check; catalogs are cached for 1h
   streamer_limit: 1 # Twitch reliably credits at most about two concurrent streams
 
 # Team watcher - auto-discover streams by team membership

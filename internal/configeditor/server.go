@@ -60,7 +60,7 @@ var schema = map[string]any{
 		"priority":                       []string{"STREAK", "DROPS", "ORDER"},
 		"category_watcher_poll_interval": "120s",
 		"team_watcher_poll_interval":     "120s",
-		"badge_watcher_poll_interval":    "1h",
+		"badge_watcher_poll_interval":    "5m",
 		"followers_order":                "ASC",
 	},
 }
