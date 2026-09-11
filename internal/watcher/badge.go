@@ -121,6 +121,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		reserved[strings.ToLower(tr.username)] = true
 	}
 	bw.mu.Unlock()
+	bw.log.Info("🏅 Badge campaigns evaluated", "catalog", len(campaigns), "eligible", len(eligibleOrdered), "active", used, "owned_badges", len(owned), "completed_campaigns", len(completed))
 	for _, c := range eligibleOrdered {
 		id := c.ID
 		if used >= limit || ctx.Err() != nil {
@@ -152,6 +153,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 			break
 		}
 		if candidate == nil {
+			bw.log.Info("No live eligible stream for badge campaign", "campaign", c.Name, "category", c.GameSlug, "all_channels", c.AllChannels)
 			continue
 		}
 		if existing := findStreamer(get(), candidate.Username); existing != nil {
@@ -164,6 +166,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 			bw.mu.Unlock()
 			reserved[strings.ToLower(candidate.Username)] = true
 			used++
+			bw.log.Info("🏅 Using existing streamer for badge campaign", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 			continue
 		}
 		s := model.NewStreamer(candidate.Username)
