@@ -467,9 +467,7 @@ func removeEmpty(v any) any {
 func validateConfig(cfg map[string]any) []string {
 	var errs []string
 
-	if mws, ok := cfg["max_watch_streams"].(float64); ok && mws < 0 {
-		errs = append(errs, "max_watch_streams must be non-negative (0 = unlimited)")
-	}
+	errs = append(errs, validateMaxWatchStreams(cfg)...)
 
 	hasStreamers := func() bool {
 		s, ok := cfg["streamers"].([]any)
@@ -515,11 +513,7 @@ func validateConfig(cfg map[string]any) []string {
 			errs = append(errs, "team_watcher is enabled but no teams are configured")
 		}
 	}
-	if bw, ok := cfg["badge_watcher"].(map[string]any); ok && bw["enabled"] == true {
-		if limit, ok := bw["streamer_limit"].(float64); ok && (limit < 1 || limit > 2) {
-			errs = append(errs, "badge_watcher.streamer_limit must be between 1 and 2")
-		}
-	}
+	errs = append(errs, validateBadgeWatcherConfig(cfg)...)
 
 	if sd, ok := cfg["streamer_defaults"].(map[string]any); ok {
 		if sd["make_predictions"] == true {
@@ -541,6 +535,26 @@ func validateConfig(cfg map[string]any) []string {
 	}
 
 	return errs
+}
+
+func validateMaxWatchStreams(cfg map[string]any) []string {
+	mws, ok := cfg["max_watch_streams"].(float64)
+	if ok && mws < 0 {
+		return []string{"max_watch_streams must be non-negative (0 = unlimited)"}
+	}
+	return nil
+}
+
+func validateBadgeWatcherConfig(cfg map[string]any) []string {
+	bw, ok := cfg["badge_watcher"].(map[string]any)
+	if !ok || bw["enabled"] != true {
+		return nil
+	}
+	limit, ok := bw["streamer_limit"].(float64)
+	if ok && (limit < 1 || limit > 2) {
+		return []string{"badge_watcher.streamer_limit must be between 1 and 2"}
+	}
+	return nil
 }
 
 func validateDuration(cfg map[string]any, section, field string, errs *[]string) {

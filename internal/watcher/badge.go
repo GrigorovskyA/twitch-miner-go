@@ -144,16 +144,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		for _, name := range c.Channels {
 			allowed[strings.ToLower(name)] = true
 		}
-		var candidate *gql.TopStream
-		for i := range streams {
-			s := &streams[i]
-			login := strings.ToLower(s.Username)
-			if bw.blacklist[login] || reserved[login] || (!c.AllChannels && !allowed[login]) {
-				continue
-			}
-			candidate = s
-			break
-		}
+		candidate := bw.pickCandidate(streams, reserved, allowed, c.AllChannels)
 		if candidate == nil {
 			bw.log.Info("No live eligible stream for badge campaign", "campaign", c.Name, "category", c.GameSlug, "all_channels", c.AllChannels)
 			continue
@@ -201,6 +192,16 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		used++
 		bw.log.Info("🏅 Discovered badge campaign stream", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 	}
+}
+
+func (bw *BadgeWatcher) pickCandidate(streams []gql.TopStream, reserved, allowed map[string]bool, allChannels bool) *gql.TopStream {
+	for i := range streams {
+		login := strings.ToLower(streams[i].Username)
+		if !bw.blacklist[login] && !reserved[login] && (allChannels || allowed[login]) {
+			return &streams[i]
+		}
+	}
+	return nil
 }
 
 func (bw *BadgeWatcher) loadCampaigns(ctx context.Context) ([]badgeCampaign, error) {

@@ -93,15 +93,14 @@ func normalizedBadgeWords(s string) []string {
 	}
 	return result
 }
-func comparableWords(s string) ([]string, bool) {
+func comparableWords(s string) []string {
 	w := normalizedBadgeWords(s)
-	removed := false
 	if len(w) >= 2 && w[len(w)-2] == "chat" && w[len(w)-1] == "badge" {
-		w, removed = w[:len(w)-2], true
+		w = w[:len(w)-2]
 	} else if len(w) > 0 && w[len(w)-1] == "badge" {
-		w, removed = w[:len(w)-1], true
+		w = w[:len(w)-1]
 	}
-	return w, removed
+	return w
 }
 func equalWords(a, b []string) bool {
 	if len(a) != len(b) {
@@ -116,8 +115,8 @@ func equalWords(a, b []string) bool {
 }
 
 func isBadgeReward(reward, game, badge string) bool {
-	rw, _ := comparableWords(reward)
-	bw, _ := comparableWords(badge)
+	rw := comparableWords(reward)
+	bw := comparableWords(badge)
 	if len(rw) == 0 || len(bw) == 0 {
 		return false
 	}
