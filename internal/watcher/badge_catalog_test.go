@@ -52,12 +52,37 @@ func TestLoadBadgeCampaignsAcceptsSingleChannel(t *testing.T) {
 
 func TestCompletedCampaigns(t *testing.T) {
 	raw := json.RawMessage(`{"completedRewardCampaigns":[{"campaign":{"name":"Launch Badge","endAt":"2026-09-12T00:00:00Z","game":{"displayName":"Some Game"}}}]}`)
-	got := completedCampaigns(raw)
+	got, err := completedCampaigns(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 1 || got[0].GameSlug != "some-game" {
 		t.Fatalf("unexpected signatures: %#v", got)
 	}
 	c := badgeCampaign{Name: "Launch Badge", GameSlug: "some-game", EndsAt: time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)}
 	if !campaignCompleted(c, got) {
 		t.Fatal("expected campaign to be completed")
+	}
+}
+
+func TestCompletedCampaignsRejectsMalformedInventory(t *testing.T) {
+	if _, err := completedCampaigns(json.RawMessage(`{`)); err == nil {
+		t.Fatal("expected malformed inventory error")
+	}
+}
+
+func TestCampaignCompletedUsesIDOrEndTimeTolerance(t *testing.T) {
+	endsAt := time.Date(2026, 9, 12, 0, 0, 0, 0, time.UTC)
+	campaign := badgeCampaign{ID: "campaign-id", Name: "Launch", GameSlug: "game", EndsAt: endsAt}
+	if !campaignCompleted(campaign, []completedCampaignSignature{{ID: "campaign-id"}}) {
+		t.Fatal("expected campaign ID match")
+	}
+	completed := completedCampaignSignature{GameSlug: "game", Name: "launch", EndsAt: endsAt.Add(4 * time.Second)}
+	if !campaignCompleted(campaign, []completedCampaignSignature{completed}) {
+		t.Fatal("expected completion within five-second tolerance")
+	}
+	completed.EndsAt = endsAt.Add(6 * time.Second)
+	if campaignCompleted(campaign, []completedCampaignSignature{completed}) {
+		t.Fatal("unexpected completion outside tolerance")
 	}
 }

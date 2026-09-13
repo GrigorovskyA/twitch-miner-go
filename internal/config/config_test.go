@@ -50,6 +50,21 @@ func TestValidateAllowsZeroMaxWatchStreams(t *testing.T) {
 	}
 }
 
+func TestValidateBadgeWatcherRequiresBadgesPriority(t *testing.T) {
+	cfg := &AccountConfig{
+		Username:     "tester",
+		Priority:     []string{"DROPS", "ORDER"},
+		BadgeWatcher: BadgeWatcherConfig{Enabled: true, StreamerLimit: 1},
+	}
+	if err := Validate(cfg); err == nil || !strings.Contains(err.Error(), "BADGES") {
+		t.Fatalf("expected missing BADGES priority error, got %v", err)
+	}
+	cfg.Priority = []string{"BADGES", "DROPS", "ORDER"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("expected badge watcher config to be valid, got %v", err)
+	}
+}
+
 func TestLoadAllAccountConfigsReportsEmptyDirectory(t *testing.T) {
 	dir := t.TempDir()
 

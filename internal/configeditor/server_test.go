@@ -318,6 +318,22 @@ func TestValidateConfig(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "badge_watcher requires BADGES priority",
+			cfg: map[string]any{
+				"badge_watcher": map[string]any{"enabled": true, "streamer_limit": float64(1)},
+				"priority":      []any{"DROPS", "ORDER"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "badge_watcher with BADGES priority",
+			cfg: map[string]any{
+				"badge_watcher": map[string]any{"enabled": true, "streamer_limit": float64(1)},
+				"priority":      []any{"BADGES", "DROPS", "ORDER"},
+			},
+			wantErr: false,
+		},
+		{
 			name: "make_predictions without bet",
 			cfg: map[string]any{
 				"streamers":         []any{map[string]any{"username": "foo"}},

@@ -554,7 +554,13 @@ func validateBadgeWatcherConfig(cfg map[string]any) []string {
 	if ok && (limit < 1 || limit > 2) {
 		return []string{"badge_watcher.streamer_limit must be between 1 and 2"}
 	}
-	return nil
+	priorities, _ := cfg["priority"].([]any)
+	for _, priority := range priorities {
+		if strings.EqualFold(fmt.Sprint(priority), "BADGES") {
+			return nil
+		}
+	}
+	return []string{"badge_watcher is enabled but BADGES is absent from priority"}
 }
 
 func validateDuration(cfg map[string]any, section, field string, errs *[]string) {

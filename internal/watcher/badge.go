@@ -15,7 +15,7 @@ import (
 	"github.com/Guliveer/twitch-miner-go/internal/model"
 )
 
-const badgeCatalogCacheTTL = 5 * time.Minute
+const badgeCatalogCacheTTL = time.Hour
 
 type badgeGQL interface {
 	GetAvailableBadgeNames(context.Context) (map[string]struct{}, error)
@@ -75,7 +75,11 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		bw.log.Warn("Failed to load Drops inventory for badges", "error", err)
 		return
 	}
-	completed := completedCampaigns(raw)
+	completed, err := completedCampaigns(raw)
+	if err != nil {
+		bw.log.Warn("Failed to parse Drops inventory for badges", "error", err)
+		return
+	}
 	eligible := make(map[string]badgeCampaign)
 	eligibleOrdered := make([]badgeCampaign, 0, len(campaigns))
 	for _, c := range campaigns {
@@ -116,6 +120,8 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 	limit := bw.cfg.StreamerLimit
 	if limit < 1 {
 		limit = 1
+	} else if limit > 2 {
+		limit = 2
 	}
 	bw.mu.Lock()
 	reserved := make(map[string]bool, len(bw.tracked))

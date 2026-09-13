@@ -119,6 +119,24 @@ keeps the load on Twitch's API predictable.
 ## Drops & campaigns
 
 <details>
+<summary>How does automatic chat badge mining work?</summary>
+
+With `badge_watcher.enabled: true`, the miner combines community-maintained
+Drops and global-badge catalogs to identify active campaigns whose requirement
+is watch time. The catalogs are cached for one hour, while Twitch inventory,
+earned badges, and live-channel eligibility are checked every `poll_interval`.
+Campaigns already earned, completed, or expired are excluded. The remaining
+campaigns are ordered by their end time, and up to `streamer_limit` eligible
+channels are marked for the `BADGES` priority. Added channels use
+`drops_only: true`, claim Drops, and never join chat. A channel is retired when
+the campaign completes or expires, it goes offline, or it changes category.
+
+The watcher fails closed on malformed inventory or catalog responses. It does
+not require badge campaign games to be listed under `category_watcher`.
+
+</details>
+
+<details>
 <summary>How often are drops synced, and what happens on each sync?</summary>
 
 `runCampaignSync` polls on `DefaultCampaignSyncInterval` **(10 minutes)**. Each

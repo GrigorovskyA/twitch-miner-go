@@ -242,14 +242,15 @@ func ownsCampaignBadge(c badgeCampaign, owned map[string]struct{}) bool {
 }
 
 type completedCampaignSignature struct {
-	GameSlug, Name string
-	EndsAt         time.Time
+	ID, GameSlug, Name string
+	EndsAt             time.Time
 }
 
-func completedCampaigns(raw json.RawMessage) []completedCampaignSignature {
+func completedCampaigns(raw json.RawMessage) ([]completedCampaignSignature, error) {
 	var inv struct {
 		Completed []struct {
 			Campaign *struct {
+				ID     string    `json:"id"`
 				Name   string    `json:"name"`
 				EndAt  time.Time `json:"endAt"`
 				EndsAt time.Time `json:"endsAt"`
@@ -260,8 +261,8 @@ func completedCampaigns(raw json.RawMessage) []completedCampaignSignature {
 			} `json:"campaign"`
 		} `json:"completedRewardCampaigns"`
 	}
-	if json.Unmarshal(raw, &inv) != nil {
-		return nil
+	if err := json.Unmarshal(raw, &inv); err != nil {
+		return nil, fmt.Errorf("parse completed reward campaigns: %w", err)
 	}
 	var result []completedCampaignSignature
 	for _, item := range inv.Completed {
@@ -277,15 +278,19 @@ func completedCampaigns(raw json.RawMessage) []completedCampaignSignature {
 			game = item.Campaign.Game.Name
 		}
 		if game != "" && item.Campaign.Name != "" && !end.IsZero() {
-			result = append(result, completedCampaignSignature{slugify(game), strings.ToLower(strings.TrimSpace(item.Campaign.Name)), end})
+			result = append(result, completedCampaignSignature{item.Campaign.ID, slugify(game), strings.ToLower(strings.TrimSpace(item.Campaign.Name)), end})
 		}
 	}
-	return result
+	return result, nil
 }
 
 func campaignCompleted(c badgeCampaign, completed []completedCampaignSignature) bool {
 	for _, s := range completed {
-		if c.GameSlug == s.GameSlug && strings.EqualFold(c.Name, s.Name) && c.EndsAt.Sub(s.EndsAt) < time.Second && s.EndsAt.Sub(c.EndsAt) < time.Second {
+		if c.ID != "" && s.ID != "" && c.ID == s.ID {
+			return true
+		}
+		const endTimeTolerance = 5 * time.Second
+		if c.GameSlug == s.GameSlug && strings.EqualFold(c.Name, s.Name) && c.EndsAt.Sub(s.EndsAt) < endTimeTolerance && s.EndsAt.Sub(c.EndsAt) < endTimeTolerance {
 			return true
 		}
 	}

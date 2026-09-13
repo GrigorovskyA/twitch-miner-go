@@ -190,6 +190,38 @@ category_watcher:
       drops_only: true
 ```
 
+### `badge_watcher`
+
+Automatically discovers active watch-time Drops whose rewards match global
+Twitch chat badges, then keeps an eligible live channel in the watch set. The
+feature is opt-in and uses community-maintained Drops and badge catalogs; both
+catalogs are cached for one hour. Inventory and earned-badge checks still run
+on every poll.
+
+`BADGES` must be present in `priority` when this watcher is enabled, otherwise
+the discovered channel is not guaranteed a watch slot.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable badge campaign discovery |
+| `poll_interval` | duration | `5m` | How often to check earned badges, inventory, and eligible live streams |
+| `streamer_limit` | int | `1` | Concurrent badge-discovered channels; valid range is 1–2 |
+| `drops_catalog_url` | string | v3 community catalog | Optional Drops catalog override |
+| `badges_catalog_url` | string | v3 community catalog | Optional global badge catalog override |
+
+```yaml
+priority:
+  - BADGES
+  - STREAK
+  - DROPS
+  - ORDER
+
+badge_watcher:
+  enabled: true
+  poll_interval: 5m
+  streamer_limit: 1
+```
+
 ### `team_watcher`
 
 Auto-discover live streams from a Twitch team. Picks the stream with the most viewers per team.

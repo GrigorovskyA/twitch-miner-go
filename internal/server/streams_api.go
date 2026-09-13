@@ -137,11 +137,11 @@ type streamInfo struct {
 }
 
 type campaignInfo struct {
-	Game   string     `json:"game,omitempty"`
-	Name   string     `json:"name,omitempty"`
-	Status string     `json:"status,omitempty"`
-	EndAt  string     `json:"end_at,omitempty"`
-	Drops  []dropInfo `json:"drops,omitempty"`
+	Game     string     `json:"game,omitempty"`
+	Name     string     `json:"name,omitempty"`
+	Status   string     `json:"status,omitempty"`
+	EndAt    string     `json:"end_at,omitempty"`
+	Drops    []dropInfo `json:"drops,omitempty"`
 }
 
 type dropInfo struct {

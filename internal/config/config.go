@@ -353,5 +353,10 @@ func validateBadgeWatcher(cfg *AccountConfig) error {
 	if cfg.BadgeWatcher.StreamerLimit < 1 || cfg.BadgeWatcher.StreamerLimit > 2 {
 		return fmt.Errorf("account %s: badge_watcher.streamer_limit must be between 1 and 2", cfg.Username)
 	}
-	return nil
+	for _, priority := range cfg.Priority {
+		if strings.EqualFold(priority, "BADGES") {
+			return nil
+		}
+	}
+	return fmt.Errorf("account %s: badge_watcher is enabled but BADGES is absent from priority", cfg.Username)
 }
