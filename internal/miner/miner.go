@@ -45,8 +45,9 @@ type Miner struct {
 
 	running atomic.Bool
 
-	catWatcher  *watcher.CategoryWatcher
-	teamWatcher *watcher.TeamWatcher
+	catWatcher   *watcher.CategoryWatcher
+	teamWatcher  *watcher.TeamWatcher
+	badgeWatcher *watcher.BadgeWatcher
 
 	streamers   []*model.Streamer
 	streamersMu sync.RWMutex
@@ -305,6 +306,14 @@ func (m *Miner) Run(ctx context.Context) error {
 		)
 		g.Go(func() error {
 			return m.teamWatcher.Run(ctx, m.addStreamer, m.removeStreamerWithReason, m.getStreamers)
+		})
+	}
+
+	if m.cfg.BadgeWatcher.Enabled {
+		defaults := m.getStreamerDefaults()
+		m.badgeWatcher = watcher.NewBadgeWatcher(m.cfg.BadgeWatcher, m.twitch.GQLClient(), nil, m.log, m.cfg.Blacklist, defaults)
+		g.Go(func() error {
+			return m.badgeWatcher.Run(ctx, m.addStreamer, m.removeStreamerWithReason, m.getStreamers)
 		})
 	}
 

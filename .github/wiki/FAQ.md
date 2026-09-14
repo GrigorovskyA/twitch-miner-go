@@ -120,6 +120,19 @@ REST API (`GET /api/accounts`) lists them too.
 ## Config editor & tray
 
 <details>
+<summary>Can the miner automatically find Twitch chat badge Drops?</summary>
+
+Yes. Enable `badge_watcher` and include `BADGES` in `priority`. Every poll the
+miner checks active watch-time badge campaigns, badges already earned by the
+account, completed Drop campaigns, and eligible live channels. It adds at most
+`streamer_limit` channels without requiring their game categories in
+`category_watcher`. The external catalogs are cached for one hour; if Twitch or
+either catalog is unavailable or malformed, discovery fails closed instead of
+guessing. See [Watcher options](Configuration-Reference#watcher-options).
+
+</details>
+
+<details>
 <summary>How do I open the config editor?</summary>
 
 While the miner is running, the embedded editor is always available at

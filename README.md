@@ -78,6 +78,7 @@ A high-performance Go rewrite of the [Twitch Channel Points Miner v2](https://gi
 - 🎯 **Community goals** — automatic goal contributions
 - 🎁 **Gift sub detection** — notifies when your account receives a gifted subscription
 - 🏷️ **Category watcher** — auto-discover streamers by game category
+- 🏅 **Badge watcher** — opt-in discovery of active watch-time chat badge Drops (community catalog)
 - 🤝 **Team watcher** — auto-discover streamers by Twitch team membership
 - ⭐ **Followers mode** — automatically watch all followed channels
 - 🔔 **Notifications** — Telegram, Discord, Webhook, Matrix, Pushover, Gotify
@@ -193,10 +194,20 @@ preferred_streamers:
   - insym
 
 priority:
+  - BADGES
   - STREAK
   - PREFERRED
   - DROPS
   - ORDER
+
+# Optional: discover active Drops whose reward matches a global Twitch chat badge.
+# BADGES must be present in priority to guarantee a badge channel gets a watch slot.
+# The two catalogs are maintained by the Twitch-Channel-Points-Miner-v3 project,
+# so discovery pauses safely if either catalog is unavailable or malformed.
+badge_watcher:
+  enabled: false
+  poll_interval: 5m # catalogs are cached for one hour
+  streamer_limit: 1
 
 streamer_defaults:
   make_predictions: true

@@ -105,6 +105,8 @@ const (
 	// PriorityPreferred prioritizes the channels listed in preferred_streamers,
 	// in the order they are listed.
 	PriorityPreferred
+	// PriorityBadges prioritizes channels dynamically added for chat badge campaigns.
+	PriorityBadges
 )
 
 // String returns the string representation of a Priority.
@@ -128,6 +130,8 @@ func (p Priority) String() string {
 		return "LOW_AVAILABILITY_FIRST"
 	case PriorityPreferred:
 		return "PREFERRED"
+	case PriorityBadges:
+		return "BADGES"
 	default:
 		return "ORDER"
 	}
@@ -154,6 +158,8 @@ func ParsePriority(s string) Priority {
 		return PriorityLowAvailabilityFirst
 	case "PREFERRED":
 		return PriorityPreferred
+	case "BADGES":
+		return PriorityBadges
 	default:
 		return PriorityOrder
 	}

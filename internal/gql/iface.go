@@ -26,6 +26,7 @@ type Operations interface {
 	GetAvailableCampaigns(ctx context.Context, channelID string) ([]string, error)
 	GetDropsDashboard(ctx context.Context, status string) ([]json.RawMessage, error)
 	GetDropsInventory(ctx context.Context) (json.RawMessage, error)
+	GetAvailableBadgeNames(ctx context.Context) (map[string]struct{}, error)
 	GetDropCampaignDetails(ctx context.Context, dropID, channelLogin string) (json.RawMessage, error)
 	GetDropCampaignDetailsBatch(ctx context.Context, campaignIDs []string, userID string) ([]json.RawMessage, error)
 	ClaimDropRewards(ctx context.Context, dropInstanceID string) (bool, error)

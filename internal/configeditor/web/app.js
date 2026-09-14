@@ -303,6 +303,11 @@
     setChecked('cfg-cw-drops-only', cw.drops_only || false);
     renderCategories(cw.categories || []);
 
+    const bw = config.badge_watcher || {};
+    setChecked('cfg-bw-enabled', bw.enabled || false);
+    setVal('cfg-bw-interval', bw.poll_interval || schema.defaults.badge_watcher_poll_interval || '5m');
+    setVal('cfg-bw-limit', bw.streamer_limit || 1);
+
     const tw = config.team_watcher || {};
     setChecked('cfg-tw-enabled', tw.enabled || false);
     setVal('cfg-tw-interval', tw.poll_interval || schema.defaults.team_watcher_poll_interval);
@@ -393,6 +398,12 @@
       if (twInt && twInt !== schema.defaults.team_watcher_poll_interval) config.team_watcher.poll_interval = twInt;
       const teams = collectTeams();
       if (teams.length > 0) config.team_watcher.teams = teams;
+    }
+
+    if (getChecked('cfg-bw-enabled')) {
+      config.badge_watcher = { enabled: true, streamer_limit: getNum('cfg-bw-limit') || 1 };
+      const bwInt = getVal('cfg-bw-interval');
+      if (bwInt && bwInt !== (schema.defaults.badge_watcher_poll_interval || '5m')) config.badge_watcher.poll_interval = bwInt;
     }
 
     const sd = collectStreamerDefaults();
@@ -1076,6 +1087,7 @@
 
     validateDurationField(config.category_watcher?.poll_interval, 'Category watcher poll_interval', errors);
     validateDurationField(config.team_watcher?.poll_interval, 'Team watcher poll_interval', errors);
+    validateDurationField(config.badge_watcher?.poll_interval, 'Badge watcher poll_interval', errors);
     validateDurationField(config.notifications?.batch?.interval, 'Global batch interval', errors);
 
     return errors;

@@ -262,6 +262,10 @@ var (
 		OperationName: "TeamPage",
 		Query:         `query TeamPage($name: String!) { team(name: $name) { id name displayName members(first: 100) { edges { node { id login displayName stream { id viewersCount game { id name displayName slug } } } } } } }`,
 	}
+	GQLAvailableBadges = GQLOperation{
+		OperationName: "AvailableBadges",
+		Query:         `query AvailableBadges { currentUser { availableBadges { id setID version title description imageURL } } }`,
+	}
 )
 
 // AllGQLOperations returns a slice of all defined GQL operations for iteration.
@@ -290,5 +294,6 @@ func AllGQLOperations() []GQLOperation {
 		GQLDirectoryPageGame,
 		GQLGameByID,
 		GQLTeamPage,
+		GQLAvailableBadges,
 	}
 }

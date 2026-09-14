@@ -124,7 +124,7 @@ For a **Windows NSSM** service, add `-auto-update` to the service arguments (re-
 ## Next steps
 
 - Open `http://localhost:8070` while the miner runs to visually edit account settings — changes hot-reload without a restart.
-- Add more streamers or enable [category/team watchers](Configuration-Reference#watcher-options)
+- Add more streamers or enable [category, badge, or team watchers](Configuration-Reference#watcher-options)
 - Configure [notifications](Notifications)
 - Set up a [prediction strategy](Prediction-Strategies)
 - Deploy as a persistent service — see [Docker/Fly.io/systemd/Windows service in the README](https://github.com/Guliveer/twitch-miner-go#19-docker)

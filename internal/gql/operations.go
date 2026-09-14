@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Guliveer/twitch-miner-go/internal/constants"
@@ -33,6 +34,33 @@ type TopStream struct {
 	GameID       string
 	GameName     string
 	GameSlug     string
+}
+
+// GetAvailableBadgeNames returns chat badge titles available to the current user.
+func (c *Client) GetAvailableBadgeNames(ctx context.Context) (map[string]struct{}, error) {
+	data, err := c.PostGQL(ctx, constants.GQLAvailableBadges, nil)
+	if err != nil {
+		return nil, fmt.Errorf("AvailableBadges: %w", err)
+	}
+	var resp struct {
+		CurrentUser *struct {
+			AvailableBadges []struct {
+				Title string `json:"title"`
+			} `json:"availableBadges"`
+		} `json:"currentUser"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("parsing AvailableBadges: %w", err)
+	}
+	result := make(map[string]struct{})
+	if resp.CurrentUser != nil {
+		for _, badge := range resp.CurrentUser.AvailableBadges {
+			if title := strings.ToLower(strings.TrimSpace(badge.Title)); title != "" {
+				result[title] = struct{}{}
+			}
+		}
+	}
+	return result, nil
 }
 
 // GetChannelPointsContext fetches channel points balance, multipliers, available claims,
