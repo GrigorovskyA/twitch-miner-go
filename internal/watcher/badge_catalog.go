@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -52,6 +54,7 @@ func (s *flexibleStrings) UnmarshalJSON(data []byte) error {
 type dropsCatalog struct {
 	Games []struct {
 		Game      string `json:"game"`
+		Source    string `json:"source"`
 		Campaigns []struct {
 			ID          string          `json:"id"`
 			Name        string          `json:"name"`
@@ -70,9 +73,15 @@ type dropsCatalog struct {
 type badgesCatalog struct {
 	Sets []struct {
 		Versions []struct {
-			Title string `json:"title"`
+			Title       string `json:"title"`
+			Description string `json:"description"`
 		} `json:"versions"`
 	} `json:"sets"`
+}
+
+type badgeDefinition struct {
+	Title       string
+	Description string
 }
 
 var badgeWordsRE = regexp.MustCompile(`[a-z0-9]+`)
@@ -146,6 +155,92 @@ func isBadgeReward(reward, game, badge string) bool {
 
 func slugify(s string) string { return strings.Join(words(s), "-") }
 
+func canonicalGameSlug(source, game string) string {
+	parsed, err := url.Parse(source)
+	if err == nil {
+		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+		for i := 0; i+1 < len(parts); i++ {
+			if parts[i] != "game" {
+				continue
+			}
+			slug := strings.ToLower(strings.TrimSpace(parts[i+1]))
+			if slug != "" && slugify(slug) == slug {
+				return slug
+			}
+		}
+	}
+	return slugify(game)
+}
+
+var badgeCampaignAliases = map[string][]string{
+	// Great Ball is also used for paid rewards, but Pichu is the only badge
+	// obtainable from this campaign through watch time alone.
+	"first partners collection": {"Pichu"},
+}
+
+func badgeRequiresPayment(description string) bool {
+	description = strings.ToLower(description)
+	for _, marker := range []string{"subscrib", "subscription", "gift", "purchase", "cheer", " bits"} {
+		if strings.Contains(description, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func badgeTitlesForWatchReward(reward, game, campaign string, badges []badgeDefinition) []string {
+	for _, badge := range badges {
+		if !badgeRequiresPayment(badge.Description) && isBadgeReward(reward, game, badge.Title) {
+			return []string{badge.Title}
+		}
+	}
+
+	campaignKey := strings.Join(words(campaign), " ")
+	if aliases := badgeCampaignAliases[campaignKey]; len(aliases) > 0 {
+		var matches []string
+		for _, alias := range aliases {
+			for _, badge := range badges {
+				if strings.EqualFold(alias, badge.Title) {
+					matches = append(matches, badge.Title)
+					break
+				}
+			}
+		}
+		return matches
+	}
+
+	if len(words(campaign)) < 2 {
+		return nil
+	}
+	var matches []string
+	for _, badge := range badges {
+		if badgeRequiresPayment(badge.Description) {
+			continue
+		}
+		description := strings.Join(words(badge.Description), " ")
+		if strings.Contains(description, campaignKey) {
+			matches = append(matches, badge.Title)
+		}
+	}
+	return matches
+}
+
+func appendUnique(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		found := false
+		for _, value := range values {
+			if strings.EqualFold(value, addition) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			values = append(values, addition)
+		}
+	}
+	return values
+}
+
 func fetchJSON(ctx context.Context, client *http.Client, url string, dst any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -188,16 +283,17 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 	if err := fetchJSON(ctx, client, badgesURL, &bc); err != nil {
 		return nil, fmt.Errorf("badges catalog: %w", err)
 	}
-	var titles []string
+	var badges []badgeDefinition
 	for _, set := range bc.Sets {
 		for _, v := range set.Versions {
 			if strings.TrimSpace(v.Title) != "" {
-				titles = append(titles, v.Title)
+				badges = append(badges, badgeDefinition{Title: v.Title, Description: v.Description})
 			}
 		}
 	}
 	var result []badgeCampaign
 	for _, game := range dc.Games {
+		gameSlug := canonicalGameSlug(game.Source, game.Game)
 		for _, campaign := range game.Campaigns {
 			if campaign.StartsAt != nil && campaign.StartsAt.After(now) {
 				continue
@@ -210,21 +306,28 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(drop.Requirement)), "watch ") {
 					continue
 				}
-				for _, title := range titles {
-					if isBadgeReward(drop.Name, game.Game, title) {
-						matches = append(matches, drop.Name)
-						break
-					}
-				}
+				matches = appendUnique(matches, badgeTitlesForWatchReward(drop.Name, game.Game, campaign.Name, badges)...)
 			}
 			if len(matches) == 0 {
 				continue
 			}
-			entry := badgeCampaign{ID: campaign.ID, Name: campaign.Name, GameName: game.Game, GameSlug: slugify(game.Game), EndsAt: *campaign.EndsAt, AllChannels: campaign.AllChannels, Channels: campaign.Channels, BadgeNames: matches}
+			sort.Strings(matches)
+			entry := badgeCampaign{ID: campaign.ID, Name: campaign.Name, GameName: game.Game, GameSlug: gameSlug, EndsAt: *campaign.EndsAt, AllChannels: campaign.AllChannels, Channels: campaign.Channels, BadgeNames: matches}
 			if campaign.StartsAt != nil {
 				entry.StartsAt = *campaign.StartsAt
 			}
-			result = append(result, entry)
+			duplicate := -1
+			for i := range result {
+				if result[i].GameSlug == entry.GameSlug && strings.EqualFold(result[i].Name, entry.Name) && equalWords(result[i].BadgeNames, entry.BadgeNames) {
+					duplicate = i
+					break
+				}
+			}
+			if duplicate < 0 {
+				result = append(result, entry)
+			} else if entry.EndsAt.Before(result[duplicate].EndsAt) {
+				result[duplicate] = entry
+			}
 		}
 	}
 	return result, nil

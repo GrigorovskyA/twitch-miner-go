@@ -15,7 +15,7 @@ import (
 	"github.com/Guliveer/twitch-miner-go/internal/model"
 )
 
-const badgeCatalogCacheTTL = time.Hour
+const badgeCatalogCacheTTL = 5 * time.Minute
 
 type badgeGQL interface {
 	GetAvailableBadgeNames(context.Context) (map[string]struct{}, error)
