@@ -13,9 +13,12 @@ import (
 )
 
 type stubBadgeGQL struct {
-	owned   map[string]struct{}
-	streams map[string][]gql.TopStream
-	raw     json.RawMessage
+	owned        map[string]struct{}
+	streams      map[string][]gql.TopStream
+	streamInfo   map[string]*gql.StreamInfoResponse
+	channelIDs   map[string]string
+	categoryHits []string
+	raw          json.RawMessage
 }
 
 func (s *stubBadgeGQL) GetAvailableBadgeNames(context.Context) (map[string]struct{}, error) {
@@ -30,7 +33,19 @@ func (s *stubBadgeGQL) GetDropsInventory(context.Context) (json.RawMessage, erro
 }
 
 func (s *stubBadgeGQL) GetTopStreamsByCategory(_ context.Context, slug string, _ int, _ bool) ([]gql.TopStream, error) {
+	s.categoryHits = append(s.categoryHits, slug)
 	return s.streams[slug], nil
+}
+
+func (s *stubBadgeGQL) GetStreamInfo(_ context.Context, login string) (*gql.StreamInfoResponse, error) {
+	return s.streamInfo[login], nil
+}
+
+func (s *stubBadgeGQL) GetUserID(_ context.Context, login string) (string, error) {
+	if id := s.channelIDs[login]; id != "" {
+		return id, nil
+	}
+	return "id-" + login, nil
 }
 
 func (s *stubBadgeGQL) GetAvailableCampaigns(context.Context, string) ([]string, error) {
@@ -94,6 +109,72 @@ func TestBadgeWatcherEvaluateMarksExistingStreamer(t *testing.T) {
 
 	if added || !existing.IsBadgeWatched || existing.BadgeCampaign != campaign.Name {
 		t.Fatalf("existing streamer was not marked correctly: added=%v streamer=%#v", added, existing)
+	}
+}
+
+func TestBadgeWatcherFindsRestrictedSpecialEventChannelOutsideCampaignCategory(t *testing.T) {
+	campaign := badgeCampaign{
+		ID:         "mouseathon",
+		Name:       "Ironmouse Subathon 2026",
+		GameName:   "Special Events",
+		GameSlug:   "special-events",
+		EndsAt:     time.Now().Add(time.Hour),
+		Channels:   []string{"ironmouse"},
+		BadgeNames: []string{"Mouseathon"},
+	}
+	client := &stubBadgeGQL{
+		streams: map[string][]gql.TopStream{},
+		streamInfo: map[string]*gql.StreamInfoResponse{
+			"ironmouse": {Game: &model.GameInfo{ID: "509658", Slug: "just-chatting", Name: "Just Chatting"}, ViewersCount: 12000},
+		},
+		channelIDs: map[string]string{"ironmouse": "123456"},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	var added []*model.Streamer
+	get := func() []*model.Streamer { return added }
+	bw.evaluate(context.Background(), func(_ context.Context, streamer *model.Streamer) {
+		added = append(added, streamer)
+	}, func(string, string) {}, get)
+
+	if len(added) != 1 || added[0].Username != "ironmouse" {
+		t.Fatalf("restricted special-event streamer not added: %#v", added)
+	}
+	if got := added[0].Stream.Game.Slug; got != "just-chatting" {
+		t.Fatalf("stream category=%q, want actual category just-chatting", got)
+	}
+	if len(client.categoryHits) != 0 {
+		t.Fatalf("restricted campaign unexpectedly searched categories: %v", client.categoryHits)
+	}
+
+	bw.evaluate(context.Background(), func(context.Context, *model.Streamer) {}, func(_, reason string) {
+		t.Fatalf("restricted special-event streamer retired on next poll: %s", reason)
+	}, get)
+}
+
+func TestBadgeWatcherRestrictedCampaignRequiresMatchingCategoryOutsideSpecialEvents(t *testing.T) {
+	campaign := badgeCampaign{
+		ID:         "restricted",
+		Name:       "Restricted Game Campaign",
+		GameName:   "Expected Game",
+		GameSlug:   "expected-game",
+		EndsAt:     time.Now().Add(time.Hour),
+		Channels:   []string{"allowed"},
+		BadgeNames: []string{"Expected Badge"},
+	}
+	client := &stubBadgeGQL{
+		streams: map[string][]gql.TopStream{},
+		streamInfo: map[string]*gql.StreamInfoResponse{
+			"allowed": {Game: &model.GameInfo{Slug: "other-game", Name: "Other Game"}},
+		},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	var added []*model.Streamer
+	bw.evaluate(context.Background(), func(_ context.Context, streamer *model.Streamer) {
+		added = append(added, streamer)
+	}, func(string, string) {}, func() []*model.Streamer { return added })
+
+	if len(added) != 0 {
+		t.Fatalf("restricted streamer in wrong category was added: %#v", added)
 	}
 }
 
