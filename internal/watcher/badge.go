@@ -15,7 +15,13 @@ import (
 	"github.com/Guliveer/twitch-miner-go/internal/model"
 )
 
-const badgeCatalogCacheTTL = 5 * time.Minute
+const (
+	badgeCatalogCacheTTL = 15 * time.Minute
+
+	// Twitch uses Special Events as a synthetic category for campaigns whose
+	// allow-listed channels may stream in any real category.
+	crossCategoryBadgeCampaignSlug = "special-events"
+)
 
 type badgeGQL interface {
 	GetAvailableBadgeNames(context.Context) (map[string]struct{}, error)
@@ -42,6 +48,7 @@ type BadgeWatcher struct {
 	blacklist       map[string]bool
 	defaults        *model.StreamerSettings
 	tracked         map[string]badgeTracked
+	channelIDs      map[string]string
 	campaigns       []badgeCampaign
 	catalogLoadedAt time.Time
 }
@@ -54,7 +61,7 @@ func NewBadgeWatcher(cfg config.BadgeWatcherConfig, gqlClient badgeGQL, httpClie
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 20 * time.Second}
 	}
-	return &BadgeWatcher{cfg: cfg, gql: gqlClient, httpClient: httpClient, log: log, blacklist: b, defaults: defaults, tracked: make(map[string]badgeTracked)}
+	return &BadgeWatcher{cfg: cfg, gql: gqlClient, httpClient: httpClient, log: log, blacklist: b, defaults: defaults, tracked: make(map[string]badgeTracked), channelIDs: make(map[string]string)}
 }
 
 func (bw *BadgeWatcher) Run(ctx context.Context, add func(context.Context, *model.Streamer), remove func(string, string), get func() []*model.Streamer) error {
@@ -177,11 +184,13 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		s.OnlineAt = time.Now()
 		s.IsBadgeWatched = true
 		s.BadgeCampaign = c.Name
-		gameSlug := candidate.GameSlug
-		if gameSlug == "" {
-			gameSlug = c.GameSlug
+		if candidate.GameID != "" || candidate.GameSlug != "" || candidate.GameName != "" {
+			gameSlug := candidate.GameSlug
+			if gameSlug == "" {
+				gameSlug = c.GameSlug
+			}
+			s.Stream.Game = &model.GameInfo{ID: candidate.GameID, Slug: gameSlug, Name: candidate.GameName}
 		}
-		s.Stream.Game = &model.GameInfo{ID: candidate.GameID, Slug: gameSlug, Name: candidate.GameName}
 		s.Stream.ViewersCount = candidate.ViewersCount
 		if ids, e := bw.gql.GetAvailableCampaigns(ctx, candidate.ChannelID); e == nil {
 			s.Stream.CampaignIDs = ids
@@ -213,11 +222,12 @@ func (bw *BadgeWatcher) findCampaignStreams(ctx context.Context, campaign badgeC
 
 	streams := make([]gql.TopStream, 0, len(campaign.Channels))
 	for _, username := range campaign.Channels {
-		login := strings.ToLower(strings.TrimSpace(username))
+		displayName := strings.TrimSpace(username)
+		login := strings.ToLower(displayName)
 		if login == "" || bw.blacklist[login] {
 			continue
 		}
-		stream, err := bw.restrictedCampaignStream(ctx, campaign, login)
+		stream, err := bw.restrictedCampaignStream(ctx, campaign, login, displayName)
 		if err != nil {
 			bw.log.Warn("Failed to check restricted badge channel", "campaign", campaign.Name, "streamer", login, "error", err)
 			continue
@@ -230,7 +240,7 @@ func (bw *BadgeWatcher) findCampaignStreams(ctx context.Context, campaign badgeC
 	return streams, nil
 }
 
-func (bw *BadgeWatcher) restrictedCampaignStream(ctx context.Context, campaign badgeCampaign, login string) (*gql.TopStream, error) {
+func (bw *BadgeWatcher) restrictedCampaignStream(ctx context.Context, campaign badgeCampaign, login, displayName string) (*gql.TopStream, error) {
 	info, err := bw.gql.GetStreamInfo(ctx, login)
 	if err != nil || info == nil {
 		return nil, err
@@ -238,17 +248,34 @@ func (bw *BadgeWatcher) restrictedCampaignStream(ctx context.Context, campaign b
 	if !badgeCampaignGameMatches(info.Game, campaign) {
 		return nil, nil
 	}
-	channelID, err := bw.gql.GetUserID(ctx, login)
+	channelID, err := bw.channelID(ctx, login)
 	if err != nil {
 		return nil, err
 	}
-	stream := &gql.TopStream{Username: login, ChannelID: channelID, DisplayName: login, ViewersCount: info.ViewersCount}
+	stream := &gql.TopStream{Username: login, ChannelID: channelID, DisplayName: displayName, ViewersCount: info.ViewersCount}
 	if info.Game != nil {
 		stream.GameID = info.Game.ID
 		stream.GameName = info.Game.Name
 		stream.GameSlug = info.Game.Slug
 	}
 	return stream, nil
+}
+
+func (bw *BadgeWatcher) channelID(ctx context.Context, login string) (string, error) {
+	bw.mu.Lock()
+	channelID := bw.channelIDs[login]
+	bw.mu.Unlock()
+	if channelID != "" {
+		return channelID, nil
+	}
+	channelID, err := bw.gql.GetUserID(ctx, login)
+	if err != nil {
+		return "", err
+	}
+	bw.mu.Lock()
+	bw.channelIDs[login] = channelID
+	bw.mu.Unlock()
+	return channelID, nil
 }
 
 func (bw *BadgeWatcher) pickCandidate(streams []gql.TopStream, reserved, allowed map[string]bool, allChannels bool) *gql.TopStream {
@@ -265,7 +292,9 @@ func (bw *BadgeWatcher) loadCampaigns(ctx context.Context) ([]badgeCampaign, err
 	if len(bw.campaigns) > 0 && time.Since(bw.catalogLoadedAt) < badgeCatalogCacheTTL {
 		return bw.campaigns, nil
 	}
-	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now())
+	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now(), func(campaign, reward string, matches []string) {
+		bw.log.Warn("Skipping ambiguous badge campaign", "campaign", campaign, "reward", reward, "badge_matches", strings.Join(matches, ", "))
+	})
 	if err != nil {
 		if len(bw.campaigns) > 0 {
 			bw.log.Warn("Badge catalogs unavailable; using cached campaigns", "error", err, "cache_age", time.Since(bw.catalogLoadedAt).Round(time.Second))
@@ -299,7 +328,7 @@ func badgeCampaignAllowsChannel(campaign badgeCampaign, username string) bool {
 }
 
 func badgeCampaignGameMatches(game *model.GameInfo, campaign badgeCampaign) bool {
-	if strings.EqualFold(campaign.GameSlug, "special-events") {
+	if strings.EqualFold(campaign.GameSlug, crossCategoryBadgeCampaignSlug) {
 		return true
 	}
 	if game == nil {

@@ -41,7 +41,7 @@ func TestLoadBadgeCampaignsAcceptsSingleChannel(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC))
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,24 +53,24 @@ func TestLoadBadgeCampaignsAcceptsSingleChannel(t *testing.T) {
 func TestLoadBadgeCampaignsUsesCanonicalSourceSlug(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/drops", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"games":[{"source":"https://twitchdrops.app/game/dawnwalker","game":"The Blood of Dawnwalker","campaigns":[{"id":"c1","name":"Dawnwalker Launch","ends_at":"2027-01-01T00:00:00Z","all_channels":true,"drops":[{"name":"Dawnwalker Launch","requirement":"Watch 1h"}]}]}]}`))
+		_, _ = w.Write([]byte(`{"games":[{"source":"https://twitchdrops.app/game/canonical-slug","game":"Different Display Name","campaigns":[{"id":"c1","name":"Launch","ends_at":"2027-01-01T00:00:00Z","all_channels":true,"drops":[{"name":"Launch Badge","requirement":"Watch 1h"}]}]}]}`))
 	})
 	mux.HandleFunc("/badges", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"sets":[{"versions":[{"title":"The Blood of Dawnwalker Launch"}]}]}`))
+		_, _ = w.Write([]byte(`{"sets":[{"versions":[{"title":"Launch Badge"}]}]}`))
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC))
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].GameSlug != "dawnwalker" {
+	if len(got) != 1 || got[0].GameSlug != "canonical-slug" {
 		t.Fatalf("unexpected campaigns: %#v", got)
 	}
 }
 
-func TestLoadBadgeCampaignsHandlesFirstPartnersWatchBadgeAndDuplicates(t *testing.T) {
+func TestLoadBadgeCampaignsSkipsAmbiguousDescriptionFallback(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/drops", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{"games":[{"source":"https://twitchdrops.app/game/special-events","game":"Special Events","campaigns":[{"id":"later","name":"First Partners Collection","ends_at":"2027-02-01T00:00:00Z","all_channels":true,"drops":[{"name":"Great Ball","requirement":"Watch 20m"}]},{"id":"sooner","name":"First Partners Collection","ends_at":"2027-01-01T00:00:00Z","all_channels":true,"drops":[{"name":"Great Ball","requirement":"Watch 20m"}]}]}]}`))
@@ -81,12 +81,15 @@ func TestLoadBadgeCampaignsHandlesFirstPartnersWatchBadgeAndDuplicates(t *testin
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC))
+	var loggedCampaign, loggedReward string
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), func(campaign, reward string, _ []string) {
+		loggedCampaign, loggedReward = campaign, reward
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != "sooner" || len(got[0].BadgeNames) != 1 || got[0].BadgeNames[0] != "Pichu" {
-		t.Fatalf("unexpected campaigns: %#v", got)
+	if len(got) != 0 || loggedCampaign != "First Partners Collection" || loggedReward != "Great Ball" {
+		t.Fatalf("ambiguous campaign was not skipped and logged: campaigns=%#v log=(%q,%q)", got, loggedCampaign, loggedReward)
 	}
 }
 
@@ -101,7 +104,7 @@ func TestLoadBadgeCampaignsMatchesCampaignDescription(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC))
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,12 +124,38 @@ func TestLoadBadgeCampaignsDoesNotConfusePaidBadgeWithWatchCampaign(t *testing.T
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC))
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("paid badge matched watch campaign: %#v", got)
+	}
+}
+
+func TestBadgeRequiresPaymentUsesWholeWords(t *testing.T) {
+	for _, tc := range []struct {
+		description string
+		want        bool
+	}{
+		{"Earned with 100 bits", true},
+		{"Available to Prime subscribers", true},
+		{"Gift a subscription", true},
+		{"Explore the orbiting station", false},
+		{"Watch the cheerfully hosted stream", false},
+	} {
+		if got := badgeRequiresPayment(tc.description); got != tc.want {
+			t.Errorf("badgeRequiresPayment(%q)=%v, want %v", tc.description, got, tc.want)
+		}
+	}
+}
+
+func TestMergeBadgeCampaignsPreservesScopeAndEarliestEnd(t *testing.T) {
+	late := badgeCampaign{ID: "late", EndsAt: time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC), Channels: []string{"MixedCase"}, BadgeNames: []string{"Launch Badge"}}
+	early := badgeCampaign{ID: "early", EndsAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), AllChannels: true, Channels: []string{"other"}, BadgeNames: []string{"launch"}}
+	got := mergeBadgeCampaigns(late, early)
+	if got.ID != "early" || !got.AllChannels || len(got.Channels) != 2 || !sameBadgeNames(got.BadgeNames, late.BadgeNames) {
+		t.Fatalf("unexpected merged campaign: %#v", got)
 	}
 }
 

@@ -156,6 +156,8 @@ func isBadgeReward(reward, game, badge string) bool {
 func slugify(s string) string { return strings.Join(words(s), "-") }
 
 func canonicalGameSlug(source, game string) string {
+	// twitchdrops.app currently exposes canonical game pages as /game/<slug>.
+	// If that contract changes, fall back to the normalized display name.
 	parsed, err := url.Parse(source)
 	if err == nil {
 		parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
@@ -172,45 +174,30 @@ func canonicalGameSlug(source, game string) string {
 	return slugify(game)
 }
 
-var badgeCampaignAliases = map[string][]string{
-	// Great Ball is also used for paid rewards, but Pichu is the only badge
-	// obtainable from this campaign through watch time alone.
-	"first partners collection": {"Pichu"},
-}
-
 func badgeRequiresPayment(description string) bool {
-	description = strings.ToLower(description)
-	for _, marker := range []string{"subscrib", "subscription", "gift", "purchase", "cheer", " bits"} {
-		if strings.Contains(description, marker) {
+	paidWords := map[string]bool{
+		"sub": true, "subscribe": true, "subscribed": true, "subscriber": true, "subscribing": true, "subscription": true,
+		"gift": true, "gifted": true, "gifting": true, "purchase": true, "purchased": true,
+		"cheer": true, "cheered": true, "cheering": true, "bits": true, "prime": true, "donate": true, "donated": true, "donation": true,
+	}
+	for _, word := range words(description) {
+		if paidWords[word] {
 			return true
 		}
 	}
 	return false
 }
 
-func badgeTitlesForWatchReward(reward, game, campaign string, badges []badgeDefinition) []string {
+func badgeTitlesForWatchReward(reward, game, campaign string, badges []badgeDefinition) ([]string, bool) {
 	for _, badge := range badges {
 		if !badgeRequiresPayment(badge.Description) && isBadgeReward(reward, game, badge.Title) {
-			return []string{badge.Title}
+			return []string{badge.Title}, false
 		}
 	}
 
 	campaignKey := strings.Join(words(campaign), " ")
-	if aliases := badgeCampaignAliases[campaignKey]; len(aliases) > 0 {
-		var matches []string
-		for _, alias := range aliases {
-			for _, badge := range badges {
-				if strings.EqualFold(alias, badge.Title) {
-					matches = append(matches, badge.Title)
-					break
-				}
-			}
-		}
-		return matches
-	}
-
 	if len(words(campaign)) < 2 {
-		return nil
+		return nil, false
 	}
 	var matches []string
 	for _, badge := range badges {
@@ -222,7 +209,10 @@ func badgeTitlesForWatchReward(reward, game, campaign string, badges []badgeDefi
 			matches = append(matches, badge.Title)
 		}
 	}
-	return matches
+	if len(matches) > 1 {
+		return matches, true
+	}
+	return matches, false
 }
 
 func appendUnique(values []string, additions ...string) []string {
@@ -268,7 +258,9 @@ func fetchJSON(ctx context.Context, client *http.Client, url string, dst any) er
 	return nil
 }
 
-func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badgesURL string, now time.Time) ([]badgeCampaign, error) {
+type ambiguousBadgeCampaignLogger func(campaign, reward string, matches []string)
+
+func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badgesURL string, now time.Time, logAmbiguous ambiguousBadgeCampaignLogger) ([]badgeCampaign, error) {
 	if dropsURL == "" {
 		dropsURL = defaultDropsCatalogURL
 	}
@@ -302,13 +294,22 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 				continue
 			}
 			var matches []string
+			ambiguous := false
 			for _, drop := range campaign.Drops {
 				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(drop.Requirement)), "watch ") {
 					continue
 				}
-				matches = appendUnique(matches, badgeTitlesForWatchReward(drop.Name, game.Game, campaign.Name, badges)...)
+				rewardMatches, rewardAmbiguous := badgeTitlesForWatchReward(drop.Name, game.Game, campaign.Name, badges)
+				if rewardAmbiguous {
+					ambiguous = true
+					if logAmbiguous != nil {
+						logAmbiguous(campaign.Name, drop.Name, rewardMatches)
+					}
+					break
+				}
+				matches = appendUnique(matches, rewardMatches...)
 			}
-			if len(matches) == 0 {
+			if ambiguous || len(matches) == 0 {
 				continue
 			}
 			sort.Strings(matches)
@@ -318,19 +319,69 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 			}
 			duplicate := -1
 			for i := range result {
-				if result[i].GameSlug == entry.GameSlug && strings.EqualFold(result[i].Name, entry.Name) && equalWords(result[i].BadgeNames, entry.BadgeNames) {
+				if result[i].GameSlug == entry.GameSlug && strings.EqualFold(result[i].Name, entry.Name) && sameBadgeNames(result[i].BadgeNames, entry.BadgeNames) {
 					duplicate = i
 					break
 				}
 			}
 			if duplicate < 0 {
 				result = append(result, entry)
-			} else if entry.EndsAt.Before(result[duplicate].EndsAt) {
-				result[duplicate] = entry
+			} else {
+				result[duplicate] = mergeBadgeCampaigns(result[duplicate], entry)
 			}
 		}
 	}
 	return result, nil
+}
+
+func normalizedBadgeName(name string) string {
+	return strings.Join(comparableWords(name), " ")
+}
+
+func sameBadgeNames(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	left := make([]string, len(a))
+	right := make([]string, len(b))
+	for i := range a {
+		left[i] = normalizedBadgeName(a[i])
+	}
+	for i := range b {
+		right[i] = normalizedBadgeName(b[i])
+	}
+	sort.Strings(left)
+	sort.Strings(right)
+	return equalWords(left, right)
+}
+
+func mergeBadgeCampaigns(a, b badgeCampaign) badgeCampaign {
+	merged := a
+	if b.EndsAt.Before(a.EndsAt) {
+		merged = b
+	}
+	merged.AllChannels = a.AllChannels || b.AllChannels
+	merged.Channels = appendUnique(append([]string(nil), a.Channels...), b.Channels...)
+	merged.BadgeNames = appendUniqueBadgeNames(append([]string(nil), a.BadgeNames...), b.BadgeNames...)
+	sort.Strings(merged.BadgeNames)
+	return merged
+}
+
+func appendUniqueBadgeNames(values []string, additions ...string) []string {
+	for _, addition := range additions {
+		key := normalizedBadgeName(addition)
+		found := false
+		for _, value := range values {
+			if normalizedBadgeName(value) == key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			values = append(values, addition)
+		}
+	}
+	return values
 }
 
 func ownsCampaignBadge(c badgeCampaign, owned map[string]struct{}) bool {

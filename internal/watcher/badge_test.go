@@ -3,6 +3,7 @@ package watcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -17,6 +18,10 @@ type stubBadgeGQL struct {
 	streams      map[string][]gql.TopStream
 	streamInfo   map[string]*gql.StreamInfoResponse
 	channelIDs   map[string]string
+	streamErrors map[string]error
+	idErrors     map[string]error
+	streamHits   map[string]int
+	idHits       map[string]int
 	categoryHits []string
 	raw          json.RawMessage
 }
@@ -38,10 +43,24 @@ func (s *stubBadgeGQL) GetTopStreamsByCategory(_ context.Context, slug string, _
 }
 
 func (s *stubBadgeGQL) GetStreamInfo(_ context.Context, login string) (*gql.StreamInfoResponse, error) {
+	if s.streamHits == nil {
+		s.streamHits = make(map[string]int)
+	}
+	s.streamHits[login]++
+	if err := s.streamErrors[login]; err != nil {
+		return nil, err
+	}
 	return s.streamInfo[login], nil
 }
 
 func (s *stubBadgeGQL) GetUserID(_ context.Context, login string) (string, error) {
+	if s.idHits == nil {
+		s.idHits = make(map[string]int)
+	}
+	s.idHits[login]++
+	if err := s.idErrors[login]; err != nil {
+		return "", err
+	}
 	if id := s.channelIDs[login]; id != "" {
 		return id, nil
 	}
@@ -175,6 +194,66 @@ func TestBadgeWatcherRestrictedCampaignRequiresMatchingCategoryOutsideSpecialEve
 
 	if len(added) != 0 {
 		t.Fatalf("restricted streamer in wrong category was added: %#v", added)
+	}
+}
+
+func TestBadgeWatcherRestrictedChannelsHandleOfflineErrorsBlacklistAndIDCache(t *testing.T) {
+	campaign := badgeCampaign{
+		ID:         "restricted",
+		Name:       "Restricted Campaign",
+		GameSlug:   crossCategoryBadgeCampaignSlug,
+		Channels:   []string{"MixedCase", "offline", "stream-error", "id-error", "blocked"},
+		BadgeNames: []string{"Badge"},
+	}
+	client := &stubBadgeGQL{
+		streamInfo: map[string]*gql.StreamInfoResponse{
+			"mixedcase": {Game: &model.GameInfo{Slug: "just-chatting"}},
+			"offline":   nil,
+			"id-error":  {Game: &model.GameInfo{Slug: "just-chatting"}},
+		},
+		streamErrors: map[string]error{"stream-error": errors.New("stream lookup failed")},
+		idErrors:     map[string]error{"id-error": errors.New("id lookup failed")},
+		channelIDs:   map[string]string{"mixedcase": "123"},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	bw.blacklist["blocked"] = true
+
+	first, err := bw.findCampaignStreams(context.Background(), campaign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := bw.findCampaignStreams(context.Background(), campaign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || len(second) != 1 || first[0].DisplayName != "MixedCase" {
+		t.Fatalf("unexpected restricted streams: first=%#v second=%#v", first, second)
+	}
+	if client.idHits["mixedcase"] != 1 {
+		t.Fatalf("channel ID fetched %d times, want once", client.idHits["mixedcase"])
+	}
+	if client.idHits["offline"] != 0 || client.streamHits["blocked"] != 0 {
+		t.Fatalf("offline or blacklisted channel caused extra lookup: idHits=%v streamHits=%v", client.idHits, client.streamHits)
+	}
+}
+
+func TestBadgeWatcherSpecialEventWithoutGameDoesNotInventCategory(t *testing.T) {
+	campaign := badgeCampaign{ID: "special", Name: "Special", GameSlug: crossCategoryBadgeCampaignSlug, EndsAt: time.Now().Add(time.Hour), Channels: []string{"ChannelCase"}, BadgeNames: []string{"Badge"}}
+	client := &stubBadgeGQL{streamInfo: map[string]*gql.StreamInfoResponse{"channelcase": {ViewersCount: 1}}, channelIDs: map[string]string{"channelcase": "123"}}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	var added []*model.Streamer
+	bw.evaluate(context.Background(), func(_ context.Context, streamer *model.Streamer) { added = append(added, streamer) }, func(string, string) {}, func() []*model.Streamer { return added })
+	if len(added) != 1 || added[0].DisplayName != "ChannelCase" || added[0].Stream.Game != nil {
+		t.Fatalf("unexpected special-event streamer: %#v", added)
+	}
+}
+
+func TestBadgeWatcherPickCandidateHonorsReservationAllowlistAndBlacklist(t *testing.T) {
+	bw := &BadgeWatcher{blacklist: map[string]bool{"blocked": true}}
+	streams := []gql.TopStream{{Username: "blocked"}, {Username: "reserved"}, {Username: "not-allowed"}, {Username: "chosen"}}
+	got := bw.pickCandidate(streams, map[string]bool{"reserved": true}, map[string]bool{"chosen": true}, false)
+	if got == nil || got.Username != "chosen" {
+		t.Fatalf("picked %#v, want chosen", got)
 	}
 }
 
