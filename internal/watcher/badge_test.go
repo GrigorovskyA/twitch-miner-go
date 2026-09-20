@@ -14,16 +14,19 @@ import (
 )
 
 type stubBadgeGQL struct {
-	owned        map[string]struct{}
-	streams      map[string][]gql.TopStream
-	streamInfo   map[string]*gql.StreamInfoResponse
-	channelIDs   map[string]string
-	streamErrors map[string]error
-	idErrors     map[string]error
-	streamHits   map[string]int
-	idHits       map[string]int
-	categoryHits []string
-	raw          json.RawMessage
+	owned                 map[string]struct{}
+	streams               map[string][]gql.TopStream
+	streamInfo            map[string]*gql.StreamInfoResponse
+	channelIDs            map[string]string
+	streamErrors          map[string]error
+	idErrors              map[string]error
+	streamHits            map[string]int
+	idHits                map[string]int
+	categoryHits          []string
+	categoryLimit         int
+	categoryDropsOnly     bool
+	availableCampaignsErr error
+	raw                   json.RawMessage
 }
 
 func (s *stubBadgeGQL) GetAvailableBadgeNames(context.Context) (map[string]struct{}, error) {
@@ -37,8 +40,10 @@ func (s *stubBadgeGQL) GetDropsInventory(context.Context) (json.RawMessage, erro
 	return s.raw, nil
 }
 
-func (s *stubBadgeGQL) GetTopStreamsByCategory(_ context.Context, slug string, _ int, _ bool) ([]gql.TopStream, error) {
+func (s *stubBadgeGQL) GetTopStreamsByCategory(_ context.Context, slug string, limit int, dropsOnly bool) ([]gql.TopStream, error) {
 	s.categoryHits = append(s.categoryHits, slug)
+	s.categoryLimit = limit
+	s.categoryDropsOnly = dropsOnly
 	return s.streams[slug], nil
 }
 
@@ -68,6 +73,9 @@ func (s *stubBadgeGQL) GetUserID(_ context.Context, login string) (string, error
 }
 
 func (s *stubBadgeGQL) GetAvailableCampaigns(context.Context, string) ([]string, error) {
+	if s.availableCampaignsErr != nil {
+		return nil, s.availableCampaignsErr
+	}
 	return []string{"drop-campaign"}, nil
 }
 
@@ -111,6 +119,19 @@ func TestBadgeWatcherEvaluateAddsAndLimitsStreams(t *testing.T) {
 		if !streamer.IsBadgeWatched || !streamer.Settings.ClaimDrops || !streamer.Settings.DropsOnly || streamer.Settings.Chat != model.ChatNever {
 			t.Fatalf("unexpected badge streamer settings: %#v", streamer)
 		}
+	}
+}
+
+func TestBadgeWatcherAllChannelsSearchDoesNotRequireDropsTag(t *testing.T) {
+	campaign := activeBadgeCampaign("one", "Game One", "game-one", "Badge One")
+	client := &stubBadgeGQL{streams: map[string][]gql.TopStream{"game-one": {{Username: "candidate"}}}}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	streams, err := bw.findCampaignStreams(context.Background(), campaign)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(streams) != 1 || client.categoryLimit != badgeCategoryStreamLimit || client.categoryDropsOnly {
+		t.Fatalf("unexpected category query: streams=%#v limit=%d dropsOnly=%v", streams, client.categoryLimit, client.categoryDropsOnly)
 	}
 }
 

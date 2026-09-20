@@ -145,12 +145,18 @@ func TestLoadBadgeCampaignsDoesNotConfusePaidBadgeWithWatchCampaign(t *testing.T
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), nil)
+	var skippedReward, skippedReason string
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), func(_, reward, reason string, _ []string) {
+		skippedReward, skippedReason = reward, reason
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("paid badge matched watch campaign: %#v", got)
+	}
+	if skippedReward != "GTA$250K" || skippedReason != "no badge match" {
+		t.Fatalf("missing catalog skip context: reward=%q reason=%q", skippedReward, skippedReason)
 	}
 }
 
@@ -163,7 +169,9 @@ func TestBadgeRequiresPaymentUsesWholeWords(t *testing.T) {
 		{"Available to Prime subscribers", true},
 		{"Gift a subscription", true},
 		{"Earned through donations and purchases", true},
-		{"Available after buying a tier", true},
+		{"Available after buying a tier", false},
+		{"Watch a bit and pay attention to the prime target", false},
+		{"Cheers to everyone reaching tier three", false},
 		{"Explore the orbiting station", false},
 		{"Watch the cheerfully hosted stream", false},
 	} {

@@ -17,6 +17,10 @@ import (
 
 const (
 	badgeCatalogCacheTTL = 15 * time.Minute
+	// Twitch's directory query accepts at most 100 streams. AllChannels badge
+	// campaigns do not require the Drops Enabled tag, so search the broadest
+	// eligible page and prefer its highest-viewer candidate.
+	badgeCategoryStreamLimit = 100
 
 	// Twitch uses Special Events as a synthetic category for campaigns whose
 	// allow-listed channels may stream in any real category.
@@ -207,6 +211,8 @@ func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStr
 	s.Stream.ViewersCount = candidate.ViewersCount
 	if ids, err := bw.gql.GetAvailableCampaigns(ctx, candidate.ChannelID); err == nil {
 		s.Stream.CampaignIDs = ids
+	} else {
+		bw.log.Warn("Failed to load campaigns for badge streamer", "streamer", candidate.Username, "error", err)
 	}
 	settings := *bw.defaults
 	if settings.Bet != nil {
@@ -223,7 +229,7 @@ func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStr
 
 func (bw *BadgeWatcher) findCampaignStreams(ctx context.Context, campaign badgeCampaign) ([]gql.TopStream, error) {
 	if campaign.AllChannels {
-		return bw.gql.GetTopStreamsByCategory(ctx, campaign.GameSlug, 100, true)
+		return bw.gql.GetTopStreamsByCategory(ctx, campaign.GameSlug, badgeCategoryStreamLimit, false)
 	}
 
 	streams := make([]gql.TopStream, 0, len(campaign.Channels))
@@ -299,7 +305,14 @@ func (bw *BadgeWatcher) loadCampaigns(ctx context.Context) ([]badgeCampaign, err
 		return bw.campaigns, nil
 	}
 	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now(), func(campaign, reward, reason string, matches []string) {
-		bw.log.Warn("Badge catalog watch reward skipped", "campaign", campaign, "reward", reward, "reason", reason, "badge_matches", strings.Join(matches, ", "))
+		fields := []any{"campaign", campaign, "reason", reason}
+		if reward != "" {
+			fields = append(fields, "reward", reward)
+		}
+		if len(matches) > 0 {
+			fields = append(fields, "badge_matches", strings.Join(matches, ", "))
+		}
+		bw.log.Warn("Badge catalog watch reward skipped", fields...)
 	})
 	if err != nil {
 		if len(bw.campaigns) > 0 {

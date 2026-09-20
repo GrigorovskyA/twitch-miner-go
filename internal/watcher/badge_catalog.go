@@ -174,21 +174,14 @@ func canonicalGameSlug(source, game string) string {
 	return slugify(game)
 }
 
-// Exact words intentionally avoid prefix false positives such as "cheerfully".
-var paidBadgeWords = map[string]struct{}{
-	"sub": {}, "subs": {}, "subscribe": {}, "subscribes": {}, "subscribed": {}, "subscriber": {}, "subscribers": {}, "subscribing": {}, "subscription": {}, "subscriptions": {},
-	"gift": {}, "gifts": {}, "gifted": {}, "gifting": {},
-	"purchase": {}, "purchases": {}, "purchased": {}, "purchasing": {},
-	"cheer": {}, "cheers": {}, "cheered": {}, "cheering": {},
-	"bit": {}, "bits": {}, "prime": {},
-	"donate": {}, "donates": {}, "donated": {}, "donating": {}, "donation": {}, "donations": {},
-	"pay": {}, "paid": {}, "payment": {}, "payments": {}, "paywall": {},
-	"buy": {}, "buys": {}, "buying": {}, "bought": {}, "tier": {}, "tiers": {},
-}
+// Keep payment detection narrow and Twitch-specific. Word boundaries avoid
+// prefix false positives, while roots cover regular inflections without an
+// open-ended dictionary of everyday words.
+var paidBadgeWordRE = regexp.MustCompile(`^(?:subs?|subscrib(?:e[ds]?|ing|ers?)|subscriptions?|gift(?:s|ed|ing)?|bits|donat(?:e[ds]?|ing|ions?)|purchas(?:e[ds]?|ing))$`)
 
 func badgeRequiresPayment(description string) bool {
 	for _, word := range words(description) {
-		if _, paid := paidBadgeWords[word]; paid {
+		if paidBadgeWordRE.MatchString(word) {
 			return true
 		}
 	}
@@ -303,6 +296,7 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 			var matches []string
 			watchDrops := 0
 			hadAmbiguousDrop := false
+			lastUnmatchedDrop := ""
 			for _, drop := range campaign.Drops {
 				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(drop.Requirement)), "watch ") {
 					continue
@@ -314,13 +308,18 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 					if logSkip != nil {
 						logSkip(campaign.Name, drop.Name, "ambiguous badge matches", rewardMatches)
 					}
+					// Keep clean matches from this campaign; ambiguous drops remain
+					// visible in logs but are not treated as owned-badge evidence.
 					continue
+				}
+				if len(rewardMatches) == 0 {
+					lastUnmatchedDrop = drop.Name
 				}
 				matches = appendUnique(matches, rewardMatches...)
 			}
 			if len(matches) == 0 {
 				if watchDrops > 0 && !hadAmbiguousDrop && logSkip != nil {
-					logSkip(campaign.Name, "", "no badge match", nil)
+					logSkip(campaign.Name, lastUnmatchedDrop, "no badge match", nil)
 				}
 				continue
 			}
