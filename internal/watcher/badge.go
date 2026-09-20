@@ -41,6 +41,7 @@ type badgeTracked struct {
 // eligible channel in the miner until Twitch reports the badge/campaign earned.
 type BadgeWatcher struct {
 	mu              sync.Mutex
+	channelIDsMu    sync.Mutex
 	cfg             config.BadgeWatcherConfig
 	gql             badgeGQL
 	httpClient      *http.Client
@@ -177,34 +178,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 			bw.log.Info("🏅 Using existing streamer for badge campaign", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 			continue
 		}
-		s := model.NewStreamer(candidate.Username)
-		s.ChannelID = candidate.ChannelID
-		s.DisplayName = candidate.DisplayName
-		s.IsOnline = true
-		s.OnlineAt = time.Now()
-		s.IsBadgeWatched = true
-		s.BadgeCampaign = c.Name
-		if candidate.GameID != "" || candidate.GameSlug != "" || candidate.GameName != "" {
-			gameSlug := candidate.GameSlug
-			if gameSlug == "" {
-				gameSlug = c.GameSlug
-			}
-			s.Stream.Game = &model.GameInfo{ID: candidate.GameID, Slug: gameSlug, Name: candidate.GameName}
-		}
-		s.Stream.ViewersCount = candidate.ViewersCount
-		if ids, e := bw.gql.GetAvailableCampaigns(ctx, candidate.ChannelID); e == nil {
-			s.Stream.CampaignIDs = ids
-		}
-		settings := *bw.defaults
-		if settings.Bet != nil {
-			copyBet := *settings.Bet
-			settings.Bet = &copyBet
-		}
-		settings.FollowRaid = false
-		settings.ClaimDrops = true
-		settings.DropsOnly = true
-		settings.Chat = model.ChatNever
-		s.Settings = &settings
+		s := bw.badgeStreamer(ctx, candidate, c)
 		add(ctx, s)
 		bw.mu.Lock()
 		bw.tracked[id] = badgeTracked{candidate.Username, true}
@@ -213,6 +187,38 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		used++
 		bw.log.Info("🏅 Discovered badge campaign stream", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 	}
+}
+
+func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStream, campaign badgeCampaign) *model.Streamer {
+	s := model.NewStreamer(candidate.Username)
+	s.ChannelID = candidate.ChannelID
+	s.DisplayName = candidate.DisplayName
+	s.IsOnline = true
+	s.OnlineAt = time.Now()
+	s.IsBadgeWatched = true
+	s.BadgeCampaign = campaign.Name
+	if candidate.GameID != "" || candidate.GameSlug != "" || candidate.GameName != "" {
+		gameSlug := candidate.GameSlug
+		if gameSlug == "" {
+			gameSlug = campaign.GameSlug
+		}
+		s.Stream.Game = &model.GameInfo{ID: candidate.GameID, Slug: gameSlug, Name: candidate.GameName}
+	}
+	s.Stream.ViewersCount = candidate.ViewersCount
+	if ids, err := bw.gql.GetAvailableCampaigns(ctx, candidate.ChannelID); err == nil {
+		s.Stream.CampaignIDs = ids
+	}
+	settings := *bw.defaults
+	if settings.Bet != nil {
+		copyBet := *settings.Bet
+		settings.Bet = &copyBet
+	}
+	settings.FollowRaid = false
+	settings.ClaimDrops = true
+	settings.DropsOnly = true
+	settings.Chat = model.ChatNever
+	s.Settings = &settings
+	return s
 }
 
 func (bw *BadgeWatcher) findCampaignStreams(ctx context.Context, campaign badgeCampaign) ([]gql.TopStream, error) {
@@ -262,9 +268,9 @@ func (bw *BadgeWatcher) restrictedCampaignStream(ctx context.Context, campaign b
 }
 
 func (bw *BadgeWatcher) channelID(ctx context.Context, login string) (string, error) {
-	bw.mu.Lock()
+	bw.channelIDsMu.Lock()
 	channelID := bw.channelIDs[login]
-	bw.mu.Unlock()
+	bw.channelIDsMu.Unlock()
 	if channelID != "" {
 		return channelID, nil
 	}
@@ -272,9 +278,9 @@ func (bw *BadgeWatcher) channelID(ctx context.Context, login string) (string, er
 	if err != nil {
 		return "", err
 	}
-	bw.mu.Lock()
+	bw.channelIDsMu.Lock()
 	bw.channelIDs[login] = channelID
-	bw.mu.Unlock()
+	bw.channelIDsMu.Unlock()
 	return channelID, nil
 }
 
@@ -292,8 +298,8 @@ func (bw *BadgeWatcher) loadCampaigns(ctx context.Context) ([]badgeCampaign, err
 	if len(bw.campaigns) > 0 && time.Since(bw.catalogLoadedAt) < badgeCatalogCacheTTL {
 		return bw.campaigns, nil
 	}
-	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now(), func(campaign, reward string, matches []string) {
-		bw.log.Warn("Skipping ambiguous badge campaign", "campaign", campaign, "reward", reward, "badge_matches", strings.Join(matches, ", "))
+	campaigns, err := loadBadgeCampaigns(ctx, bw.httpClient, bw.cfg.DropsCatalogURL, bw.cfg.BadgesCatalogURL, time.Now(), func(campaign, reward, reason string, matches []string) {
+		bw.log.Warn("Badge catalog watch reward skipped", "campaign", campaign, "reward", reward, "reason", reason, "badge_matches", strings.Join(matches, ", "))
 	})
 	if err != nil {
 		if len(bw.campaigns) > 0 {

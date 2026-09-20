@@ -81,15 +81,36 @@ func TestLoadBadgeCampaignsSkipsAmbiguousDescriptionFallback(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	var loggedCampaign, loggedReward string
-	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), func(campaign, reward string, _ []string) {
-		loggedCampaign, loggedReward = campaign, reward
+	var loggedCampaign, loggedReward, loggedReason string
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), func(campaign, reward, reason string, _ []string) {
+		loggedCampaign, loggedReward, loggedReason = campaign, reward, reason
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 0 || loggedCampaign != "First Partners Collection" || loggedReward != "Great Ball" {
-		t.Fatalf("ambiguous campaign was not skipped and logged: campaigns=%#v log=(%q,%q)", got, loggedCampaign, loggedReward)
+	if len(got) != 0 || loggedCampaign != "First Partners Collection" || loggedReward != "Great Ball" || loggedReason != "ambiguous badge matches" {
+		t.Fatalf("ambiguous campaign was not skipped and logged: campaigns=%#v log=(%q,%q,%q)", got, loggedCampaign, loggedReward, loggedReason)
+	}
+}
+
+func TestLoadBadgeCampaignsKeepsCleanMatchWhenAnotherDropIsAmbiguous(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drops", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"games":[{"game":"Special Events","campaigns":[{"id":"mixed","name":"Community Celebration","ends_at":"2027-01-01T00:00:00Z","all_channels":true,"drops":[{"name":"Clean Badge","requirement":"Watch 10m"},{"name":"Mystery Reward","requirement":"Watch 20m"}]}]}]}`))
+	})
+	mux.HandleFunc("/badges", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"sets":[{"versions":[{"title":"Clean Badge","description":"Watch reward."},{"title":"Ambiguous One","description":"Community Celebration reward."},{"title":"Ambiguous Two","description":"Community Celebration reward."}]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	logs := 0
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), func(_, _, _ string, _ []string) { logs++ })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0].BadgeNames) != 1 || got[0].BadgeNames[0] != "Clean Badge" || logs != 1 {
+		t.Fatalf("clean drop was not preserved: campaigns=%#v logs=%d", got, logs)
 	}
 }
 
@@ -141,6 +162,8 @@ func TestBadgeRequiresPaymentUsesWholeWords(t *testing.T) {
 		{"Earned with 100 bits", true},
 		{"Available to Prime subscribers", true},
 		{"Gift a subscription", true},
+		{"Earned through donations and purchases", true},
+		{"Available after buying a tier", true},
 		{"Explore the orbiting station", false},
 		{"Watch the cheerfully hosted stream", false},
 	} {

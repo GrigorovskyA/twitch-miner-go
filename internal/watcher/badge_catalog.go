@@ -174,14 +174,21 @@ func canonicalGameSlug(source, game string) string {
 	return slugify(game)
 }
 
+// Exact words intentionally avoid prefix false positives such as "cheerfully".
+var paidBadgeWords = map[string]struct{}{
+	"sub": {}, "subs": {}, "subscribe": {}, "subscribes": {}, "subscribed": {}, "subscriber": {}, "subscribers": {}, "subscribing": {}, "subscription": {}, "subscriptions": {},
+	"gift": {}, "gifts": {}, "gifted": {}, "gifting": {},
+	"purchase": {}, "purchases": {}, "purchased": {}, "purchasing": {},
+	"cheer": {}, "cheers": {}, "cheered": {}, "cheering": {},
+	"bit": {}, "bits": {}, "prime": {},
+	"donate": {}, "donates": {}, "donated": {}, "donating": {}, "donation": {}, "donations": {},
+	"pay": {}, "paid": {}, "payment": {}, "payments": {}, "paywall": {},
+	"buy": {}, "buys": {}, "buying": {}, "bought": {}, "tier": {}, "tiers": {},
+}
+
 func badgeRequiresPayment(description string) bool {
-	paidWords := map[string]bool{
-		"sub": true, "subscribe": true, "subscribed": true, "subscriber": true, "subscribing": true, "subscription": true,
-		"gift": true, "gifted": true, "gifting": true, "purchase": true, "purchased": true,
-		"cheer": true, "cheered": true, "cheering": true, "bits": true, "prime": true, "donate": true, "donated": true, "donation": true,
-	}
 	for _, word := range words(description) {
-		if paidWords[word] {
+		if _, paid := paidBadgeWords[word]; paid {
 			return true
 		}
 	}
@@ -258,9 +265,9 @@ func fetchJSON(ctx context.Context, client *http.Client, url string, dst any) er
 	return nil
 }
 
-type ambiguousBadgeCampaignLogger func(campaign, reward string, matches []string)
+type badgeCatalogSkipLogger func(campaign, reward, reason string, matches []string)
 
-func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badgesURL string, now time.Time, logAmbiguous ambiguousBadgeCampaignLogger) ([]badgeCampaign, error) {
+func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badgesURL string, now time.Time, logSkip badgeCatalogSkipLogger) ([]badgeCampaign, error) {
 	if dropsURL == "" {
 		dropsURL = defaultDropsCatalogURL
 	}
@@ -294,22 +301,27 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 				continue
 			}
 			var matches []string
-			ambiguous := false
+			watchDrops := 0
+			hadAmbiguousDrop := false
 			for _, drop := range campaign.Drops {
 				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(drop.Requirement)), "watch ") {
 					continue
 				}
+				watchDrops++
 				rewardMatches, rewardAmbiguous := badgeTitlesForWatchReward(drop.Name, game.Game, campaign.Name, badges)
 				if rewardAmbiguous {
-					ambiguous = true
-					if logAmbiguous != nil {
-						logAmbiguous(campaign.Name, drop.Name, rewardMatches)
+					hadAmbiguousDrop = true
+					if logSkip != nil {
+						logSkip(campaign.Name, drop.Name, "ambiguous badge matches", rewardMatches)
 					}
-					break
+					continue
 				}
 				matches = appendUnique(matches, rewardMatches...)
 			}
-			if ambiguous || len(matches) == 0 {
+			if len(matches) == 0 {
+				if watchDrops > 0 && !hadAmbiguousDrop && logSkip != nil {
+					logSkip(campaign.Name, "", "no badge match", nil)
+				}
 				continue
 			}
 			sort.Strings(matches)
