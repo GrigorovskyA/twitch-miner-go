@@ -16,6 +16,7 @@ import (
 type stubBadgeGQL struct {
 	owned                 map[string]struct{}
 	streams               map[string][]gql.TopStream
+	taggedStreams         map[string][]gql.TopStream
 	streamInfo            map[string]*gql.StreamInfoResponse
 	channelIDs            map[string]string
 	streamErrors          map[string]error
@@ -25,7 +26,11 @@ type stubBadgeGQL struct {
 	categoryHits          []string
 	categoryLimit         int
 	categoryDropsOnly     bool
+	categoryDropsHistory  []bool
 	availableCampaignsErr error
+	availableCampaigns    map[string][]string
+	availableErrors       map[string]error
+	availableHits         map[string]int
 	raw                   json.RawMessage
 }
 
@@ -44,6 +49,10 @@ func (s *stubBadgeGQL) GetTopStreamsByCategory(_ context.Context, slug string, l
 	s.categoryHits = append(s.categoryHits, slug)
 	s.categoryLimit = limit
 	s.categoryDropsOnly = dropsOnly
+	s.categoryDropsHistory = append(s.categoryDropsHistory, dropsOnly)
+	if dropsOnly && s.taggedStreams != nil {
+		return s.taggedStreams[slug], nil
+	}
 	return s.streams[slug], nil
 }
 
@@ -72,11 +81,21 @@ func (s *stubBadgeGQL) GetUserID(_ context.Context, login string) (string, error
 	return "id-" + login, nil
 }
 
-func (s *stubBadgeGQL) GetAvailableCampaigns(context.Context, string) ([]string, error) {
+func (s *stubBadgeGQL) GetAvailableCampaigns(_ context.Context, channelID string) ([]string, error) {
+	if s.availableHits == nil {
+		s.availableHits = make(map[string]int)
+	}
+	s.availableHits[channelID]++
+	if err := s.availableErrors[channelID]; err != nil {
+		return nil, err
+	}
 	if s.availableCampaignsErr != nil {
 		return nil, s.availableCampaignsErr
 	}
-	return []string{"drop-campaign"}, nil
+	if ids, ok := s.availableCampaigns[channelID]; ok {
+		return ids, nil
+	}
+	return []string{"one", "two", "three", "drop-campaign"}, nil
 }
 
 func testBadgeWatcher(t *testing.T, client *stubBadgeGQL, limit int, campaigns ...badgeCampaign) *BadgeWatcher {
@@ -135,6 +154,118 @@ func TestBadgeWatcherAllChannelsSearchDoesNotRequireDropsTag(t *testing.T) {
 	}
 }
 
+func TestBadgeWatcherAllChannelsFallsBackAndSelectsEligibleCampaign(t *testing.T) {
+	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	client := &stubBadgeGQL{
+		taggedStreams: map[string][]gql.TopStream{"game": {{Username: "largest", ChannelID: "1"}}},
+		streams: map[string][]gql.TopStream{"game": {
+			{Username: "largest", ChannelID: "1"},
+			{Username: "eligible", ChannelID: "2"},
+		}},
+		availableCampaigns: map[string][]string{"1": {"other"}, "2": {"target", "other"}},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	candidate, err := bw.findCampaignCandidate(context.Background(), campaign, map[string]bool{}, make(map[string]badgeCampaignLookup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate == nil || candidate.stream.Username != "eligible" || len(candidate.campaignIDs) != 2 {
+		t.Fatalf("unexpected candidate: %#v", candidate)
+	}
+	if client.availableHits["1"] != 1 || client.availableHits["2"] != 1 {
+		t.Fatalf("campaign lookups were not cached: %v", client.availableHits)
+	}
+	if len(client.categoryDropsHistory) != 2 || !client.categoryDropsHistory[0] || client.categoryDropsHistory[1] {
+		t.Fatalf("unexpected category query order: %v", client.categoryDropsHistory)
+	}
+}
+
+func TestBadgeWatcherAllChannelsStopsAtFirstEligibleTaggedStream(t *testing.T) {
+	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	client := &stubBadgeGQL{
+		taggedStreams:      map[string][]gql.TopStream{"game": {{Username: "eligible", ChannelID: "1"}, {Username: "unused", ChannelID: "2"}}},
+		streams:            map[string][]gql.TopStream{"game": {{Username: "fallback", ChannelID: "3"}}},
+		availableCampaigns: map[string][]string{"1": {"target"}},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	candidate, err := bw.findCampaignCandidate(context.Background(), campaign, map[string]bool{}, make(map[string]badgeCampaignLookup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate == nil || candidate.stream.Username != "eligible" || len(client.categoryDropsHistory) != 1 || !client.categoryDropsHistory[0] {
+		t.Fatalf("tagged candidate was not selected directly: candidate=%#v queries=%v", candidate, client.categoryDropsHistory)
+	}
+	if client.availableHits["2"] != 0 || client.availableHits["3"] != 0 {
+		t.Fatalf("search did not stop after the first eligible stream: %v", client.availableHits)
+	}
+}
+
+func TestBadgeWatcherAllChannelsSkipsLookupErrorsAndIneligibleStreams(t *testing.T) {
+	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	client := &stubBadgeGQL{
+		taggedStreams: map[string][]gql.TopStream{"game": {
+			{Username: "error", ChannelID: "1"},
+			{Username: "wrong", ChannelID: "2"},
+		}},
+		streams:            map[string][]gql.TopStream{"game": {{Username: "wrong", ChannelID: "2"}}},
+		availableCampaigns: map[string][]string{"2": {"other"}},
+		availableErrors:    map[string]error{"1": errors.New("campaign lookup failed")},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	candidate, err := bw.findCampaignCandidate(context.Background(), campaign, map[string]bool{}, make(map[string]badgeCampaignLookup))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate != nil || client.availableHits["1"] != 1 || client.availableHits["2"] != 1 {
+		t.Fatalf("unexpected ineligible result: candidate=%#v hits=%v", candidate, client.availableHits)
+	}
+}
+
+func TestBadgeWatcherCampaignLookupCacheIsReusableWithinPoll(t *testing.T) {
+	first := activeBadgeCampaign("first", "Game", "game", "First Badge")
+	second := activeBadgeCampaign("second", "Game", "game", "Second Badge")
+	client := &stubBadgeGQL{
+		taggedStreams:      map[string][]gql.TopStream{"game": {{Username: "eligible", ChannelID: "1"}}},
+		availableCampaigns: map[string][]string{"1": {"first", "second"}},
+	}
+	bw := testBadgeWatcher(t, client, 2, first, second)
+	cache := make(map[string]badgeCampaignLookup)
+	if candidate, err := bw.findCampaignCandidate(context.Background(), first, map[string]bool{}, cache); err != nil || candidate == nil {
+		t.Fatalf("first lookup failed: candidate=%#v err=%v", candidate, err)
+	}
+	if candidate, err := bw.findCampaignCandidate(context.Background(), second, map[string]bool{}, cache); err != nil || candidate == nil {
+		t.Fatalf("second lookup failed: candidate=%#v err=%v", candidate, err)
+	}
+	if client.availableHits["1"] != 1 {
+		t.Fatalf("campaign lookup cache was not reused: %v", client.availableHits)
+	}
+}
+
+func TestBadgeStreamerUsesPreloadedCampaignIDs(t *testing.T) {
+	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	client := &stubBadgeGQL{}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	streamer := bw.badgeStreamer(context.Background(), &gql.TopStream{Username: "eligible", ChannelID: "1"}, campaign, []string{"target"})
+	if client.availableHits["1"] != 0 || len(streamer.Stream.CampaignIDs) != 1 || streamer.Stream.CampaignIDs[0] != "target" {
+		t.Fatalf("preloaded campaign IDs were not reused: hits=%v streamer=%#v", client.availableHits, streamer)
+	}
+}
+
+func TestBadgeStreamerValidRequiresTargetCampaignForAllChannels(t *testing.T) {
+	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	streamer := model.NewStreamer("candidate")
+	streamer.IsOnline = true
+	streamer.Stream.Game = &model.GameInfo{Slug: "game"}
+	streamer.Stream.CampaignIDs = []string{"other"}
+	if badgeStreamerValid(streamer, campaign) {
+		t.Fatal("streamer without the target campaign was considered valid")
+	}
+	streamer.Stream.CampaignIDs = append(streamer.Stream.CampaignIDs, "target")
+	if !badgeStreamerValid(streamer, campaign) {
+		t.Fatal("streamer with the target campaign was considered invalid")
+	}
+}
+
 func TestBadgeWatcherEvaluateMarksExistingStreamer(t *testing.T) {
 	campaign := activeBadgeCampaign("one", "Game One", "game-one", "Badge One")
 	client := &stubBadgeGQL{streams: map[string][]gql.TopStream{
@@ -147,9 +278,36 @@ func TestBadgeWatcherEvaluateMarksExistingStreamer(t *testing.T) {
 	added := false
 	bw.evaluate(context.Background(), func(context.Context, *model.Streamer) { added = true }, func(string, string) {}, func() []*model.Streamer { return []*model.Streamer{existing} })
 
-	if added || !existing.IsBadgeWatched || existing.BadgeCampaign != campaign.Name {
+	if added || !existing.IsBadgeWatched || existing.BadgeCampaign != campaign.Name || !containsString(existing.Stream.CampaignIDs, campaign.ID) {
 		t.Fatalf("existing streamer was not marked correctly: added=%v streamer=%#v", added, existing)
 	}
+}
+
+func TestBadgeWatcherEligibleAllChannelsStreamerDoesNotFlap(t *testing.T) {
+	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	client := &stubBadgeGQL{
+		taggedStreams:      map[string][]gql.TopStream{"game": {{Username: "eligible", ChannelID: "1", GameSlug: "game"}}},
+		availableCampaigns: map[string][]string{"1": {"target"}},
+	}
+	bw := testBadgeWatcher(t, client, 1, campaign)
+	var streamers []*model.Streamer
+	get := func() []*model.Streamer { return streamers }
+	bw.evaluate(context.Background(), func(_ context.Context, streamer *model.Streamer) { streamers = append(streamers, streamer) }, func(string, string) {}, get)
+	if len(streamers) != 1 {
+		t.Fatalf("eligible streamer was not added: %#v", streamers)
+	}
+	bw.evaluate(context.Background(), func(context.Context, *model.Streamer) {}, func(_, reason string) {
+		t.Fatalf("eligible streamer flapped on the next poll: %s", reason)
+	}, get)
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBadgeWatcherFindsRestrictedSpecialEventChannelOutsideCampaignCategory(t *testing.T) {
@@ -178,6 +336,9 @@ func TestBadgeWatcherFindsRestrictedSpecialEventChannelOutsideCampaignCategory(t
 
 	if len(added) != 1 || added[0].Username != "ironmouse" {
 		t.Fatalf("restricted special-event streamer not added: %#v", added)
+	}
+	if added[0].Settings.DropsOnly {
+		t.Fatal("restricted badge streamer should trust its allow-list when campaign IDs are unavailable")
 	}
 	if got := added[0].Stream.Game.Slug; got != "just-chatting" {
 		t.Fatalf("stream category=%q, want actual category just-chatting", got)

@@ -169,9 +169,14 @@ func TestBadgeRequiresPaymentUsesWholeWords(t *testing.T) {
 		{"Available to Prime subscribers", true},
 		{"Gift a subscription", true},
 		{"Earned through donations and purchases", true},
-		{"Available after buying a tier", false},
+		{"Available after buying a tier", true},
+		{"Buy the Deluxe edition to earn this badge", true},
+		{"Cheer 500 to unlock", true},
+		{"Prime Gaming reward", true},
+		{"Paid reward for members", true},
 		{"Watch a bit and pay attention to the prime target", false},
 		{"Cheers to everyone reaching tier three", false},
+		{"Reach tier 3 of the watch marathon", false},
 		{"Explore the orbiting station", false},
 		{"Watch the cheerfully hosted stream", false},
 	} {
@@ -181,12 +186,69 @@ func TestBadgeRequiresPaymentUsesWholeWords(t *testing.T) {
 	}
 }
 
+func TestOwnsCampaignBadgeRequiresEveryKnownBadge(t *testing.T) {
+	campaign := badgeCampaign{GameName: "Game", BadgeNames: []string{"First Badge", "Second Badge"}}
+	if ownsCampaignBadge(campaign, map[string]struct{}{"First Badge": {}}) {
+		t.Fatal("partially owned campaign was treated as complete")
+	}
+	if !ownsCampaignBadge(campaign, map[string]struct{}{"First Badge": {}, "Second Badge": {}}) {
+		t.Fatal("fully owned campaign was not treated as complete")
+	}
+	if ownsCampaignBadge(badgeCampaign{}, map[string]struct{}{}) {
+		t.Fatal("campaign without known badges was treated as owned")
+	}
+	if ownsCampaignBadge(badgeCampaign{BadgeNames: []string{"Known"}, HasAmbiguousDrops: true}, map[string]struct{}{"Known": {}}) {
+		t.Fatal("campaign with an ambiguous unresolved drop was treated as complete")
+	}
+}
+
 func TestMergeBadgeCampaignsPreservesScopeAndEarliestEnd(t *testing.T) {
 	late := badgeCampaign{ID: "late", EndsAt: time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC), Channels: []string{"MixedCase"}, BadgeNames: []string{"Launch Badge"}}
 	early := badgeCampaign{ID: "early", EndsAt: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), AllChannels: true, Channels: []string{"other"}, BadgeNames: []string{"launch"}}
 	got := mergeBadgeCampaigns(late, early)
 	if got.ID != "early" || !got.AllChannels || len(got.Channels) != 2 || !sameBadgeNames(got.BadgeNames, late.BadgeNames) {
 		t.Fatalf("unexpected merged campaign: %#v", got)
+	}
+}
+
+func TestLoadBadgeCampaignsMergesDuplicateCampaignID(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drops", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"games":[{"game":"Game","campaigns":[{"id":"same","name":"Launch","ends_at":"2027-02-01T00:00:00Z","channels":["One"],"drops":[{"name":"First Badge","requirement":"Watch 10m"}]},{"id":"same","name":"Launch","ends_at":"2027-01-01T00:00:00Z","all_channels":true,"channels":["Two"],"drops":[{"name":"Second Badge","requirement":"Watch 20m"}]}]}]}`))
+	})
+	mux.HandleFunc("/badges", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"sets":[{"versions":[{"title":"First Badge"},{"title":"Second Badge"}]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "same" || !got[0].AllChannels || len(got[0].Channels) != 2 || len(got[0].BadgeNames) != 2 || got[0].EndsAt.Month() != time.January {
+		t.Fatalf("duplicate campaign ID was not merged: %#v", got)
+	}
+}
+
+func TestLoadBadgeCampaignsSkipsMissingCampaignID(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/drops", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"games":[{"game":"Game","campaigns":[{"name":"Missing ID","ends_at":"2027-01-01T00:00:00Z","all_channels":true,"drops":[{"name":"Badge","requirement":"Watch 10m"}]}]}]}`))
+	})
+	mux.HandleFunc("/badges", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"sets":[{"versions":[{"title":"Badge"}]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var reason string
+	got, err := loadBadgeCampaigns(context.Background(), srv.Client(), srv.URL+"/drops", srv.URL+"/badges", time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC), func(_, _, gotReason string, _ []string) { reason = gotReason })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 || reason != "missing campaign ID" {
+		t.Fatalf("missing-ID campaign was not skipped observably: campaigns=%#v reason=%q", got, reason)
 	}
 }
 

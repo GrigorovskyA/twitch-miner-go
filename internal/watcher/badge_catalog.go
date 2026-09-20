@@ -23,6 +23,7 @@ type badgeCampaign struct {
 	ID, Name, GameName, GameSlug string
 	StartsAt, EndsAt             time.Time
 	AllChannels                  bool
+	HasAmbiguousDrops            bool
 	Channels                     []string
 	BadgeNames                   []string
 }
@@ -179,13 +180,19 @@ func canonicalGameSlug(source, game string) string {
 // open-ended dictionary of everyday words.
 var paidBadgeWordRE = regexp.MustCompile(`^(?:subs?|subscrib(?:e[ds]?|ing|ers?)|subscriptions?|gift(?:s|ed|ing)?|bits|donat(?:e[ds]?|ing|ions?)|purchas(?:e[ds]?|ing))$`)
 
+// Everyday payment-adjacent words are only considered paid when they appear
+// in an unambiguous entitlement phrase. This keeps "watch a bit" and "pay
+// attention" eligible while rejecting descriptions such as "buying a tier".
+var paidBadgePhraseRE = regexp.MustCompile(`(?:\b(?:buy|buys|buying|bought)\b(?:\s+[a-z0-9]+){0,3}\s+\b(?:tiers?|game|edition|bundle|subs?|subscriptions?)\b|\bprime\s+(?:gaming|subs?|subscriptions?|rewards?)\b|\bcheer(?:s|ed|ing)?\s+(?:[0-9]+|to\s+unlock|with\s+bits)\b|\b(?:pay|pays|paying|paid)\s+to\s+unlock\b|\b(?:paid|payments?)\s+(?:badges?|rewards?|tiers?|subs?|subscriptions?)\b)`)
+
 func badgeRequiresPayment(description string) bool {
-	for _, word := range words(description) {
+	descriptionWords := words(description)
+	for _, word := range descriptionWords {
 		if paidBadgeWordRE.MatchString(word) {
 			return true
 		}
 	}
-	return false
+	return paidBadgePhraseRE.MatchString(strings.Join(descriptionWords, " "))
 }
 
 func badgeTitlesForWatchReward(reward, game, campaign string, badges []badgeDefinition) ([]string, bool) {
@@ -293,6 +300,12 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 			if campaign.EndsAt == nil || !campaign.EndsAt.After(now) {
 				continue
 			}
+			if strings.TrimSpace(campaign.ID) == "" {
+				if logSkip != nil {
+					logSkip(campaign.Name, "", "missing campaign ID", nil)
+				}
+				continue
+			}
 			var matches []string
 			watchDrops := 0
 			hadAmbiguousDrop := false
@@ -324,13 +337,13 @@ func loadBadgeCampaigns(ctx context.Context, client *http.Client, dropsURL, badg
 				continue
 			}
 			sort.Strings(matches)
-			entry := badgeCampaign{ID: campaign.ID, Name: campaign.Name, GameName: game.Game, GameSlug: gameSlug, EndsAt: *campaign.EndsAt, AllChannels: campaign.AllChannels, Channels: campaign.Channels, BadgeNames: matches}
+			entry := badgeCampaign{ID: campaign.ID, Name: campaign.Name, GameName: game.Game, GameSlug: gameSlug, EndsAt: *campaign.EndsAt, AllChannels: campaign.AllChannels, HasAmbiguousDrops: hadAmbiguousDrop, Channels: campaign.Channels, BadgeNames: matches}
 			if campaign.StartsAt != nil {
 				entry.StartsAt = *campaign.StartsAt
 			}
 			duplicate := -1
 			for i := range result {
-				if result[i].GameSlug == entry.GameSlug && strings.EqualFold(result[i].Name, entry.Name) && sameBadgeNames(result[i].BadgeNames, entry.BadgeNames) {
+				if result[i].ID == entry.ID {
 					duplicate = i
 					break
 				}
@@ -372,6 +385,7 @@ func mergeBadgeCampaigns(a, b badgeCampaign) badgeCampaign {
 		merged = b
 	}
 	merged.AllChannels = a.AllChannels || b.AllChannels
+	merged.HasAmbiguousDrops = a.HasAmbiguousDrops || b.HasAmbiguousDrops
 	merged.Channels = appendUnique(append([]string(nil), a.Channels...), b.Channels...)
 	merged.BadgeNames = appendUniqueBadgeNames(append([]string(nil), a.BadgeNames...), b.BadgeNames...)
 	sort.Strings(merged.BadgeNames)
@@ -396,14 +410,22 @@ func appendUniqueBadgeNames(values []string, additions ...string) []string {
 }
 
 func ownsCampaignBadge(c badgeCampaign, owned map[string]struct{}) bool {
+	if len(c.BadgeNames) == 0 || c.HasAmbiguousDrops {
+		return false
+	}
 	for _, reward := range c.BadgeNames {
+		ownedReward := false
 		for title := range owned {
 			if isBadgeReward(reward, c.GameName, title) {
-				return true
+				ownedReward = true
+				break
 			}
 		}
+		if !ownedReward {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 type completedCampaignSignature struct {

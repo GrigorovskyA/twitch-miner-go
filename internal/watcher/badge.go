@@ -3,7 +3,9 @@ package watcher
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -39,6 +41,16 @@ type badgeGQL interface {
 type badgeTracked struct {
 	username string
 	added    bool
+}
+
+type badgeCandidate struct {
+	stream      *gql.TopStream
+	campaignIDs []string
+}
+
+type badgeCampaignLookup struct {
+	ids []string
+	err error
 }
 
 // BadgeWatcher discovers active watch-time chat badge Drops and keeps a live,
@@ -144,6 +156,7 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 	}
 	bw.mu.Unlock()
 	bw.log.Info("🏅 Badge campaigns evaluated", "catalog", len(campaigns), "eligible", len(eligibleOrdered), "active", used, "owned_badges", len(owned), "completed_campaigns", len(completed))
+	campaignLookupCache := make(map[string]badgeCampaignLookup)
 	for _, c := range eligibleOrdered {
 		id := c.ID
 		if used >= limit || ctx.Err() != nil {
@@ -155,45 +168,43 @@ func (bw *BadgeWatcher) evaluate(ctx context.Context, add func(context.Context, 
 		if exists {
 			continue
 		}
-		streams, err := bw.findCampaignStreams(ctx, c)
+		candidate, err := bw.findCampaignCandidate(ctx, c, reserved, campaignLookupCache)
 		if err != nil {
 			bw.log.Warn("Failed to find badge stream", "campaign", c.Name, "category", c.GameSlug, "error", err)
 			continue
 		}
-		allowed := make(map[string]bool)
-		for _, name := range c.Channels {
-			allowed[strings.ToLower(name)] = true
-		}
-		candidate := bw.pickCandidate(streams, reserved, allowed, c.AllChannels)
 		if candidate == nil {
 			bw.log.Info("No live eligible stream for badge campaign", "campaign", c.Name, "category", c.GameSlug, "all_channels", c.AllChannels)
 			continue
 		}
-		if existing := findStreamer(get(), candidate.Username); existing != nil {
+		if existing := findStreamer(get(), candidate.stream.Username); existing != nil {
 			existing.Mu.Lock()
 			existing.IsBadgeWatched = true
 			existing.BadgeCampaign = c.Name
+			if len(candidate.campaignIDs) > 0 {
+				existing.Stream.CampaignIDs = append([]string(nil), candidate.campaignIDs...)
+			}
 			existing.Mu.Unlock()
 			bw.mu.Lock()
-			bw.tracked[id] = badgeTracked{candidate.Username, false}
+			bw.tracked[id] = badgeTracked{candidate.stream.Username, false}
 			bw.mu.Unlock()
-			reserved[strings.ToLower(candidate.Username)] = true
+			reserved[strings.ToLower(candidate.stream.Username)] = true
 			used++
-			bw.log.Info("🏅 Using existing streamer for badge campaign", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
+			bw.log.Info("🏅 Using existing streamer for badge campaign", "streamer", candidate.stream.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 			continue
 		}
-		s := bw.badgeStreamer(ctx, candidate, c)
+		s := bw.badgeStreamer(ctx, candidate.stream, c, candidate.campaignIDs)
 		add(ctx, s)
 		bw.mu.Lock()
-		bw.tracked[id] = badgeTracked{candidate.Username, true}
+		bw.tracked[id] = badgeTracked{candidate.stream.Username, true}
 		bw.mu.Unlock()
-		reserved[strings.ToLower(candidate.Username)] = true
+		reserved[strings.ToLower(candidate.stream.Username)] = true
 		used++
-		bw.log.Info("🏅 Discovered badge campaign stream", "streamer", candidate.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
+		bw.log.Info("🏅 Discovered badge campaign stream", "streamer", candidate.stream.Username, "campaign", c.Name, "category", c.GameSlug, "badges", strings.Join(c.BadgeNames, ", "))
 	}
 }
 
-func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStream, campaign badgeCampaign) *model.Streamer {
+func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStream, campaign badgeCampaign, campaignIDs []string) *model.Streamer {
 	s := model.NewStreamer(candidate.Username)
 	s.ChannelID = candidate.ChannelID
 	s.DisplayName = candidate.DisplayName
@@ -209,7 +220,9 @@ func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStr
 		s.Stream.Game = &model.GameInfo{ID: candidate.GameID, Slug: gameSlug, Name: candidate.GameName}
 	}
 	s.Stream.ViewersCount = candidate.ViewersCount
-	if ids, err := bw.gql.GetAvailableCampaigns(ctx, candidate.ChannelID); err == nil {
+	if campaignIDs != nil {
+		s.Stream.CampaignIDs = append([]string(nil), campaignIDs...)
+	} else if ids, err := bw.gql.GetAvailableCampaigns(ctx, candidate.ChannelID); err == nil {
 		s.Stream.CampaignIDs = ids
 	} else {
 		bw.log.Warn("Failed to load campaigns for badge streamer", "streamer", candidate.Username, "error", err)
@@ -221,10 +234,101 @@ func (bw *BadgeWatcher) badgeStreamer(ctx context.Context, candidate *gql.TopStr
 	}
 	settings.FollowRaid = false
 	settings.ClaimDrops = true
-	settings.DropsOnly = true
+	// A restricted campaign's explicit allow-list is authoritative even when
+	// Twitch's generic Drops endpoint does not expose campaign IDs for it.
+	settings.DropsOnly = campaign.AllChannels
 	settings.Chat = model.ChatNever
 	s.Settings = &settings
 	return s
+}
+
+func (bw *BadgeWatcher) findCampaignCandidate(ctx context.Context, campaign badgeCampaign, reserved map[string]bool, lookupCache map[string]badgeCampaignLookup) (*badgeCandidate, error) {
+	if !campaign.AllChannels {
+		streams, err := bw.findCampaignStreams(ctx, campaign)
+		if err != nil {
+			return nil, err
+		}
+		allowed := make(map[string]bool, len(campaign.Channels))
+		for _, name := range campaign.Channels {
+			allowed[strings.ToLower(strings.TrimSpace(name))] = true
+		}
+		candidate := bw.pickCandidate(streams, reserved, allowed, false)
+		if candidate == nil {
+			return nil, nil
+		}
+		return &badgeCandidate{stream: candidate}, nil
+	}
+	if strings.TrimSpace(campaign.ID) == "" {
+		return nil, fmt.Errorf("all-channels campaign %q has no campaign ID", campaign.Name)
+	}
+
+	lookupFailures := 0
+	var lastLookupErr error
+	var directoryErrors []error
+	for _, dropsOnly := range []bool{true, false} {
+		streams, err := bw.gql.GetTopStreamsByCategory(ctx, campaign.GameSlug, badgeCategoryStreamLimit, dropsOnly)
+		if err != nil {
+			directoryErrors = append(directoryErrors, err)
+			continue
+		}
+		candidate, failures, lookupErr := bw.pickEligibleCampaignCandidate(ctx, streams, reserved, campaign.ID, lookupCache)
+		lookupFailures += failures
+		if lookupErr != nil {
+			lastLookupErr = lookupErr
+		}
+		if candidate != nil {
+			bw.logCampaignCandidateWarnings(campaign, lookupFailures, lastLookupErr, directoryErrors)
+			return candidate, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+	}
+	bw.logCampaignCandidateWarnings(campaign, lookupFailures, lastLookupErr, directoryErrors)
+	if len(directoryErrors) == 2 {
+		return nil, fmt.Errorf("both badge category searches failed: %v; %v", directoryErrors[0], directoryErrors[1])
+	}
+	return nil, nil
+}
+
+func (bw *BadgeWatcher) logCampaignCandidateWarnings(campaign badgeCampaign, lookupFailures int, lastLookupErr error, directoryErrors []error) {
+	if lookupFailures > 0 {
+		bw.log.Warn("Failed to verify some badge campaign candidates", "campaign", campaign.Name, "failures", lookupFailures, "last_error", lastLookupErr)
+	}
+	if len(directoryErrors) == 1 {
+		bw.log.Warn("One badge category search failed", "campaign", campaign.Name, "error", directoryErrors[0])
+	}
+}
+
+func (bw *BadgeWatcher) pickEligibleCampaignCandidate(ctx context.Context, streams []gql.TopStream, reserved map[string]bool, campaignID string, cache map[string]badgeCampaignLookup) (*badgeCandidate, int, error) {
+	failures := 0
+	var lastErr error
+	for i := range streams {
+		if ctx.Err() != nil {
+			return nil, failures, lastErr
+		}
+		stream := &streams[i]
+		login := strings.ToLower(stream.Username)
+		if bw.blacklist[login] || reserved[login] || stream.ChannelID == "" {
+			continue
+		}
+		lookup, found := cache[stream.ChannelID]
+		if !found {
+			lookup.ids, lookup.err = bw.gql.GetAvailableCampaigns(ctx, stream.ChannelID)
+			cache[stream.ChannelID] = lookup
+			if lookup.err != nil {
+				failures++
+				lastErr = lookup.err
+			}
+		}
+		if lookup.err != nil {
+			continue
+		}
+		if slices.Contains(lookup.ids, campaignID) {
+			return &badgeCandidate{stream: stream, campaignIDs: lookup.ids}, failures, lastErr
+		}
+	}
+	return nil, failures, lastErr
 }
 
 func (bw *BadgeWatcher) findCampaignStreams(ctx context.Context, campaign badgeCampaign) ([]gql.TopStream, error) {
@@ -332,6 +436,9 @@ func badgeStreamerValid(s *model.Streamer, campaign badgeCampaign) bool {
 		return false
 	}
 	if !campaign.AllChannels && !badgeCampaignAllowsChannel(campaign, s.Username) {
+		return false
+	}
+	if campaign.AllChannels && campaign.ID != "" && !slices.Contains(s.Stream.CampaignIDs, campaign.ID) {
 		return false
 	}
 	return badgeCampaignGameMatches(s.Stream.Game, campaign)
