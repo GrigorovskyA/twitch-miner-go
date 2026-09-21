@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -258,10 +257,6 @@ func (bw *BadgeWatcher) findCampaignCandidate(ctx context.Context, campaign badg
 		}
 		return &badgeCandidate{stream: candidate}, nil
 	}
-	if strings.TrimSpace(campaign.ID) == "" {
-		return nil, fmt.Errorf("all-channels campaign %q has no campaign ID", campaign.Name)
-	}
-
 	lookupFailures := 0
 	var lastLookupErr error
 	var directoryErrors []error
@@ -271,7 +266,7 @@ func (bw *BadgeWatcher) findCampaignCandidate(ctx context.Context, campaign badg
 			directoryErrors = append(directoryErrors, err)
 			continue
 		}
-		candidate, failures, lookupErr := bw.pickEligibleCampaignCandidate(ctx, streams, reserved, campaign.ID, lookupCache)
+		candidate, failures, lookupErr := bw.pickEligibleCampaignCandidate(ctx, streams, reserved, lookupCache)
 		lookupFailures += failures
 		if lookupErr != nil {
 			lastLookupErr = lookupErr
@@ -300,7 +295,7 @@ func (bw *BadgeWatcher) logCampaignCandidateWarnings(campaign badgeCampaign, loo
 	}
 }
 
-func (bw *BadgeWatcher) pickEligibleCampaignCandidate(ctx context.Context, streams []gql.TopStream, reserved map[string]bool, campaignID string, cache map[string]badgeCampaignLookup) (*badgeCandidate, int, error) {
+func (bw *BadgeWatcher) pickEligibleCampaignCandidate(ctx context.Context, streams []gql.TopStream, reserved map[string]bool, cache map[string]badgeCampaignLookup) (*badgeCandidate, int, error) {
 	failures := 0
 	var lastErr error
 	for i := range streams {
@@ -324,7 +319,10 @@ func (bw *BadgeWatcher) pickEligibleCampaignCandidate(ctx context.Context, strea
 		if lookup.err != nil {
 			continue
 		}
-		if slices.Contains(lookup.ids, campaignID) {
+		// Catalog IDs (such as twitchdrops-app-*) and Twitch campaign IDs are
+		// different namespaces. The catalog identifies the badge campaign for
+		// this game; Twitch confirms that the channel exposes active Drops.
+		if len(lookup.ids) > 0 {
 			return &badgeCandidate{stream: stream, campaignIDs: lookup.ids}, failures, lastErr
 		}
 	}
@@ -438,7 +436,10 @@ func badgeStreamerValid(s *model.Streamer, campaign badgeCampaign) bool {
 	if !campaign.AllChannels && !badgeCampaignAllowsChannel(campaign, s.Username) {
 		return false
 	}
-	if campaign.AllChannels && campaign.ID != "" && !slices.Contains(s.Stream.CampaignIDs, campaign.ID) {
+	// CampaignIDs are Twitch UUIDs, whereas campaign.ID comes from the
+	// external catalog. An all-channel streamer is valid when Twitch reports
+	// at least one active Drops campaign on it.
+	if campaign.AllChannels && len(s.Stream.CampaignIDs) == 0 {
 		return false
 	}
 	return badgeCampaignGameMatches(s.Stream.Game, campaign)

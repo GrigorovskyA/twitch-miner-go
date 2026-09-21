@@ -155,21 +155,21 @@ func TestBadgeWatcherAllChannelsSearchDoesNotRequireDropsTag(t *testing.T) {
 }
 
 func TestBadgeWatcherAllChannelsFallsBackAndSelectsEligibleCampaign(t *testing.T) {
-	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game", "game", "Badge")
 	client := &stubBadgeGQL{
 		taggedStreams: map[string][]gql.TopStream{"game": {{Username: "largest", ChannelID: "1"}}},
 		streams: map[string][]gql.TopStream{"game": {
 			{Username: "largest", ChannelID: "1"},
 			{Username: "eligible", ChannelID: "2"},
 		}},
-		availableCampaigns: map[string][]string{"1": {"other"}, "2": {"target", "other"}},
+		availableCampaigns: map[string][]string{"1": {}, "2": {"174fd699-3230-4076-b542-c15a8dcb4ab1"}},
 	}
 	bw := testBadgeWatcher(t, client, 1, campaign)
 	candidate, err := bw.findCampaignCandidate(context.Background(), campaign, map[string]bool{}, make(map[string]badgeCampaignLookup))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if candidate == nil || candidate.stream.Username != "eligible" || len(candidate.campaignIDs) != 2 {
+	if candidate == nil || candidate.stream.Username != "eligible" || len(candidate.campaignIDs) != 1 || candidate.campaignIDs[0] != "174fd699-3230-4076-b542-c15a8dcb4ab1" {
 		t.Fatalf("unexpected candidate: %#v", candidate)
 	}
 	if client.availableHits["1"] != 1 || client.availableHits["2"] != 1 {
@@ -181,11 +181,11 @@ func TestBadgeWatcherAllChannelsFallsBackAndSelectsEligibleCampaign(t *testing.T
 }
 
 func TestBadgeWatcherAllChannelsStopsAtFirstEligibleTaggedStream(t *testing.T) {
-	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game", "game", "Badge")
 	client := &stubBadgeGQL{
 		taggedStreams:      map[string][]gql.TopStream{"game": {{Username: "eligible", ChannelID: "1"}, {Username: "unused", ChannelID: "2"}}},
 		streams:            map[string][]gql.TopStream{"game": {{Username: "fallback", ChannelID: "3"}}},
-		availableCampaigns: map[string][]string{"1": {"target"}},
+		availableCampaigns: map[string][]string{"1": {"174fd699-3230-4076-b542-c15a8dcb4ab1"}},
 	}
 	bw := testBadgeWatcher(t, client, 1, campaign)
 	candidate, err := bw.findCampaignCandidate(context.Background(), campaign, map[string]bool{}, make(map[string]badgeCampaignLookup))
@@ -201,14 +201,14 @@ func TestBadgeWatcherAllChannelsStopsAtFirstEligibleTaggedStream(t *testing.T) {
 }
 
 func TestBadgeWatcherAllChannelsSkipsLookupErrorsAndIneligibleStreams(t *testing.T) {
-	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game", "game", "Badge")
 	client := &stubBadgeGQL{
 		taggedStreams: map[string][]gql.TopStream{"game": {
 			{Username: "error", ChannelID: "1"},
 			{Username: "wrong", ChannelID: "2"},
 		}},
 		streams:            map[string][]gql.TopStream{"game": {{Username: "wrong", ChannelID: "2"}}},
-		availableCampaigns: map[string][]string{"2": {"other"}},
+		availableCampaigns: map[string][]string{"2": {}},
 		availableErrors:    map[string]error{"1": errors.New("campaign lookup failed")},
 	}
 	bw := testBadgeWatcher(t, client, 1, campaign)
@@ -222,11 +222,11 @@ func TestBadgeWatcherAllChannelsSkipsLookupErrorsAndIneligibleStreams(t *testing
 }
 
 func TestBadgeWatcherCampaignLookupCacheIsReusableWithinPoll(t *testing.T) {
-	first := activeBadgeCampaign("first", "Game", "game", "First Badge")
-	second := activeBadgeCampaign("second", "Game", "game", "Second Badge")
+	first := activeBadgeCampaign("twitchdrops-app-first", "Game", "game", "First Badge")
+	second := activeBadgeCampaign("twitchdrops-app-second", "Game", "game", "Second Badge")
 	client := &stubBadgeGQL{
 		taggedStreams:      map[string][]gql.TopStream{"game": {{Username: "eligible", ChannelID: "1"}}},
-		availableCampaigns: map[string][]string{"1": {"first", "second"}},
+		availableCampaigns: map[string][]string{"1": {"174fd699-3230-4076-b542-c15a8dcb4ab1"}},
 	}
 	bw := testBadgeWatcher(t, client, 2, first, second)
 	cache := make(map[string]badgeCampaignLookup)
@@ -242,32 +242,32 @@ func TestBadgeWatcherCampaignLookupCacheIsReusableWithinPoll(t *testing.T) {
 }
 
 func TestBadgeStreamerUsesPreloadedCampaignIDs(t *testing.T) {
-	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game", "game", "Badge")
 	client := &stubBadgeGQL{}
 	bw := testBadgeWatcher(t, client, 1, campaign)
-	streamer := bw.badgeStreamer(context.Background(), &gql.TopStream{Username: "eligible", ChannelID: "1"}, campaign, []string{"target"})
-	if client.availableHits["1"] != 0 || len(streamer.Stream.CampaignIDs) != 1 || streamer.Stream.CampaignIDs[0] != "target" {
+	streamer := bw.badgeStreamer(context.Background(), &gql.TopStream{Username: "eligible", ChannelID: "1"}, campaign, []string{"174fd699-3230-4076-b542-c15a8dcb4ab1"})
+	if client.availableHits["1"] != 0 || len(streamer.Stream.CampaignIDs) != 1 || streamer.Stream.CampaignIDs[0] != "174fd699-3230-4076-b542-c15a8dcb4ab1" {
 		t.Fatalf("preloaded campaign IDs were not reused: hits=%v streamer=%#v", client.availableHits, streamer)
 	}
 }
 
-func TestBadgeStreamerValidRequiresTargetCampaignForAllChannels(t *testing.T) {
-	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+func TestBadgeStreamerValidRequiresActiveDropsForAllChannels(t *testing.T) {
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game", "game", "Badge")
 	streamer := model.NewStreamer("candidate")
 	streamer.IsOnline = true
 	streamer.Stream.Game = &model.GameInfo{Slug: "game"}
-	streamer.Stream.CampaignIDs = []string{"other"}
+	streamer.Stream.CampaignIDs = nil
 	if badgeStreamerValid(streamer, campaign) {
-		t.Fatal("streamer without the target campaign was considered valid")
+		t.Fatal("streamer without an active Twitch campaign was considered valid")
 	}
-	streamer.Stream.CampaignIDs = append(streamer.Stream.CampaignIDs, "target")
+	streamer.Stream.CampaignIDs = []string{"174fd699-3230-4076-b542-c15a8dcb4ab1"}
 	if !badgeStreamerValid(streamer, campaign) {
-		t.Fatal("streamer with the target campaign was considered invalid")
+		t.Fatal("streamer with an active Twitch campaign was considered invalid")
 	}
 }
 
 func TestBadgeWatcherEvaluateMarksExistingStreamer(t *testing.T) {
-	campaign := activeBadgeCampaign("one", "Game One", "game-one", "Badge One")
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game One", "game-one", "Badge One")
 	client := &stubBadgeGQL{streams: map[string][]gql.TopStream{
 		"game-one": {{Username: "existing", ChannelID: "1", GameName: "Game One"}},
 	}}
@@ -278,16 +278,16 @@ func TestBadgeWatcherEvaluateMarksExistingStreamer(t *testing.T) {
 	added := false
 	bw.evaluate(context.Background(), func(context.Context, *model.Streamer) { added = true }, func(string, string) {}, func() []*model.Streamer { return []*model.Streamer{existing} })
 
-	if added || !existing.IsBadgeWatched || existing.BadgeCampaign != campaign.Name || !containsString(existing.Stream.CampaignIDs, campaign.ID) {
+	if added || !existing.IsBadgeWatched || existing.BadgeCampaign != campaign.Name || len(existing.Stream.CampaignIDs) == 0 {
 		t.Fatalf("existing streamer was not marked correctly: added=%v streamer=%#v", added, existing)
 	}
 }
 
 func TestBadgeWatcherEligibleAllChannelsStreamerDoesNotFlap(t *testing.T) {
-	campaign := activeBadgeCampaign("target", "Game", "game", "Badge")
+	campaign := activeBadgeCampaign("twitchdrops-app-17cdc638f243b467", "Game", "game", "Badge")
 	client := &stubBadgeGQL{
 		taggedStreams:      map[string][]gql.TopStream{"game": {{Username: "eligible", ChannelID: "1", GameSlug: "game"}}},
-		availableCampaigns: map[string][]string{"1": {"target"}},
+		availableCampaigns: map[string][]string{"1": {"174fd699-3230-4076-b542-c15a8dcb4ab1"}},
 	}
 	bw := testBadgeWatcher(t, client, 1, campaign)
 	var streamers []*model.Streamer
