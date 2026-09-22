@@ -301,15 +301,6 @@ func TestBadgeWatcherEligibleAllChannelsStreamerDoesNotFlap(t *testing.T) {
 	}, get)
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func TestBadgeWatcherFindsRestrictedSpecialEventChannelOutsideCampaignCategory(t *testing.T) {
 	campaign := badgeCampaign{
 		ID:         "mouseathon",
